@@ -177,10 +177,13 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .card-top { display: flex; justify-content: space-between; gap: 12px; }
 .badge { align-self: flex-start; padding: 4px 8px; border: 1px solid #334155; border-radius: 999px; color: #cbd5e1; font-size: 11px; }
 .badge.online, .badge.running { color: var(--green); border-color: rgba(74,222,128,.32); background: rgba(74,222,128,.08); }
-.timeline { display: grid; gap: 14px; }
-.timeline-item { display: grid; grid-template-columns: 8px 1fr auto; align-items: start; gap: 12px; color: #d9dee7; font-size: 13px; }
-.timeline-item::before { content: ""; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--accent); }
-.timeline-item time { color: var(--muted); font-size: 11px; }
+.timeline { display: grid; gap: 8px; }
+.timeline-item { display: grid; grid-template-columns: 9px minmax(0,1fr) max-content; align-items: center; gap: 13px; min-height: 54px; padding: 11px 13px; color: #d9dee7; background: rgba(10,13,20,.55); border: 1px solid rgba(49,56,72,.55); border-radius: 10px; font-size: 13px; }
+.timeline-item::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(124,92,255,.1); }
+.timeline-content { min-width: 0; }
+.timeline-content strong { display: block; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.timeline-content small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.timeline-item time { align-self: center; min-width: 58px; color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; }
 .panel-head h3 small { color: var(--muted); font-size: 12px; font-weight: 400; }
 .audit-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 170px auto auto; gap: 9px; margin-bottom: 18px; }
 .audit-toolbar input, .audit-toolbar select { margin: 0; }
@@ -220,3 +223,4 @@ dialog::backdrop { background: rgba(0,0,0,.7); backdrop-filter: blur(5px); }
 @media (max-width: 580px) { .app-shell { display: block; } .sidebar { position: fixed; z-index: 5; left: 0; right: 0; top: auto; bottom: 0; width: auto; height: 66px; padding: 8px; border: 0; border-top: 1px solid var(--line); overflow-x: auto; } .brand, .sidebar-foot { display: none; } nav { grid-template-columns: repeat(6,minmax(58px,1fr)); min-width: 420px; } nav a { padding: 10px; } main { padding: 24px 16px 90px; } .topbar { align-items: flex-end; } .topbar .primary { padding: 10px 12px; } .metric-grid { grid-template-columns: 1fr 1fr; } .form-grid { grid-template-columns: 1fr; } .form-grid label.full { grid-column: auto; } .recovery-card { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 760px) { .audit-toolbar { grid-template-columns: 1fr 1fr; } .audit-toolbar input { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .recovery-upload { grid-template-columns: 1fr; } }
+@media (max-width: 580px) { .timeline-item { grid-template-columns: 9px minmax(0,1fr); } .timeline-item time { grid-column: 2; justify-self: start; min-width: 0; margin-top: 2px; } }
