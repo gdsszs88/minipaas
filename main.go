@@ -13,9 +13,11 @@ import (
 	"io/fs"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,19 +205,34 @@ func (s *Store) mutate(fn func(*State) error) error {
 	return s.saveLocked()
 }
 
-type session struct{ Expires time.Time }
+type session struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	LastSeen  time.Time `json:"lastSeenAt"`
+	Expires   time.Time `json:"expires"`
+	IP        string    `json:"ip"`
+	UserAgent string    `json:"userAgent"`
+}
+
+type loginFailure struct {
+	Count        int
+	WindowStart  time.Time
+	BlockedUntil time.Time
+}
 
 type API struct {
-	store      *Store
-	password   [32]byte
-	passwordMu sync.RWMutex
-	sessions   map[string]session
-	sessionMu  sync.Mutex
-	sessionTTL time.Duration
-	secrets    *SecretBox
-	dataDir    string
-	setupJobs  map[string]*SetupJob
-	setupMu    sync.RWMutex
+	store         *Store
+	password      [32]byte
+	passwordMu    sync.RWMutex
+	sessions      map[string]session
+	sessionMu     sync.Mutex
+	sessionTTL    time.Duration
+	loginFailures map[string]loginFailure
+	loginMu       sync.Mutex
+	secrets       *SecretBox
+	dataDir       string
+	setupJobs     map[string]*SetupJob
+	setupMu       sync.RWMutex
 }
 
 func (a *API) passwordMatches(value string) bool {
@@ -226,6 +243,26 @@ func (a *API) passwordMatches(value string) bool {
 }
 
 func (a *API) sessionsPath() string { return filepath.Join(a.dataDir, "sessions.json") }
+
+func sessionID(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:8])
+}
+
+func clientIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); forwarded != "" {
+		return forwarded
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https")
+}
 
 func (a *API) loadSessions() {
 	b, err := os.ReadFile(a.sessionsPath())
@@ -239,6 +276,15 @@ func (a *API) loadSessions() {
 	now := time.Now()
 	for token, item := range saved {
 		if item.Expires.After(now) {
+			if item.ID == "" {
+				item.ID = sessionID(token)
+			}
+			if item.CreatedAt.IsZero() {
+				item.CreatedAt = now
+			}
+			if item.LastSeen.IsZero() {
+				item.LastSeen = item.CreatedAt
+			}
 			a.sessions[token] = item
 		}
 	}
@@ -292,18 +338,90 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if !a.passwordMatches(input.Password) {
-		time.Sleep(300 * time.Millisecond)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密码不正确"})
+	ip := clientIP(r)
+	now := time.Now()
+	a.loginMu.Lock()
+	failure := a.loginFailures[ip]
+	if failure.BlockedUntil.After(now) {
+		retry := int(time.Until(failure.BlockedUntil).Seconds()) + 1
+		a.loginMu.Unlock()
+		w.Header().Set("Retry-After", strconv.Itoa(retry))
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录失败次数过多，请稍后再试"})
 		return
 	}
+	a.loginMu.Unlock()
+	if !a.passwordMatches(input.Password) {
+		a.loginMu.Lock()
+		failure = a.loginFailures[ip]
+		if failure.WindowStart.IsZero() || now.Sub(failure.WindowStart) > 10*time.Minute {
+			failure = loginFailure{WindowStart: now}
+		}
+		failure.Count++
+		if failure.Count >= 5 {
+			failure.BlockedUntil = now.Add(10 * time.Minute)
+		}
+		a.loginFailures[ip] = failure
+		a.loginMu.Unlock()
+		time.Sleep(300 * time.Millisecond)
+		if failure.BlockedUntil.After(now) {
+			w.Header().Set("Retry-After", "600")
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录失败次数过多，已临时锁定 10 分钟"})
+		} else {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密码不正确"})
+		}
+		return
+	}
+	a.loginMu.Lock()
+	delete(a.loginFailures, ip)
+	a.loginMu.Unlock()
 	token := newID("sess") + newID("")
+	expires := now.Add(a.sessionTTL)
 	a.sessionMu.Lock()
-	a.sessions[token] = session{Expires: time.Now().Add(a.sessionTTL)}
+	a.sessions[token] = session{ID: sessionID(token), CreatedAt: now, LastSeen: now, Expires: expires, IP: ip, UserAgent: r.UserAgent()}
 	a.saveSessionsLocked()
 	a.sessionMu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(a.sessionTTL.Seconds())})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expiresAt": time.Now().Add(a.sessionTTL)})
+	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: token, Path: "/", HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteStrictMode, MaxAge: int(a.sessionTTL.Seconds())})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expiresAt": expires})
+}
+
+func (a *API) accountSessions(w http.ResponseWriter, r *http.Request) {
+	current := ""
+	if c, err := r.Cookie("minipaas_session"); err == nil {
+		current = c.Value
+	}
+	if r.Method == http.MethodDelete {
+		id := r.PathValue("id")
+		removedCurrent := false
+		a.sessionMu.Lock()
+		for token, item := range a.sessions {
+			if item.ID == id {
+				delete(a.sessions, token)
+				removedCurrent = token == current
+				break
+			}
+		}
+		a.saveSessionsLocked()
+		a.sessionMu.Unlock()
+		if removedCurrent {
+			http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteStrictMode})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "current": removedCurrent})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	a.sessionMu.Lock()
+	items := make([]map[string]any, 0, len(a.sessions))
+	for token, item := range a.sessions {
+		items = append(items, map[string]any{"id": item.ID, "createdAt": item.CreatedAt, "lastSeenAt": item.LastSeen, "expiresAt": item.Expires, "ip": item.IP, "userAgent": item.UserAgent, "current": token == current})
+	}
+	a.sessionMu.Unlock()
+	sort.Slice(items, func(i, j int) bool {
+		return items[i]["lastSeenAt"].(time.Time).After(items[j]["lastSeenAt"].(time.Time))
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
 }
 
 func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +475,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		a.saveSessionsLocked()
 		a.sessionMu.Unlock()
 	}
-	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -374,6 +492,11 @@ func (a *API) auth(next http.Handler) http.Handler {
 			delete(a.sessions, c.Value)
 			a.saveSessionsLocked()
 			ok = false
+		}
+		if ok && time.Since(s.LastSeen) > 5*time.Minute {
+			s.LastSeen = time.Now()
+			a.sessions[c.Value] = s
+			a.saveSessionsLocked()
 		}
 		a.sessionMu.Unlock()
 		if !ok {
@@ -871,13 +994,15 @@ func main() {
 			copy(passwordHash[:], decoded)
 		}
 	}
-	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}}
+	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}}
 	api.loadSessions()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", api.login)
 	mux.Handle("POST /api/logout", api.auth(http.HandlerFunc(api.logout)))
 	mux.Handle("POST /api/account/password", api.auth(http.HandlerFunc(api.changePassword)))
+	mux.Handle("GET /api/account/sessions", api.auth(http.HandlerFunc(api.accountSessions)))
+	mux.Handle("DELETE /api/account/sessions/{id}", api.auth(http.HandlerFunc(api.accountSessions)))
 	mux.Handle("GET /api/dashboard", api.auth(http.HandlerFunc(api.dashboard)))
 	mux.Handle("GET /api/monitoring", api.auth(http.HandlerFunc(api.monitoring)))
 	mux.Handle("/api/servers", api.auth(http.HandlerFunc(api.servers)))

@@ -24,7 +24,16 @@ $('#login-form').addEventListener('submit', async (event) => {
   catch (error) { $('#login-error').textContent = error.message; }
 });
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); showLogin(); });
+$('#manage-sessions').addEventListener('click', openSessions);
 $('#change-password').addEventListener('click', () => { $('#modal-form').dataset.kind = 'password'; $('#modal-eyebrow').textContent = 'SECURITY'; $('#modal-title').textContent = '修改管理员密码'; $('#modal-fields').innerHTML = `<label class="full">当前密码<input name="currentPassword" type="password" autocomplete="current-password" required></label><label class="full">新密码<input name="newPassword" type="password" autocomplete="new-password" required></label><label class="full">再次输入新密码<input name="confirmPassword" type="password" autocomplete="new-password" required></label>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); });
+
+async function openSessions() {
+  $('#modal-form').dataset.kind = ''; $('#modal-eyebrow').textContent = 'SECURITY'; $('#modal-title').textContent = '登录设备';
+  $('#modal-fields').innerHTML = '<div class="setup-loading full"><span class="spinner"></span>正在读取登录会话…</div>'; $('#modal-error').textContent = ''; $('.modal-actions').classList.add('hidden');
+  if (!$('#modal').open) $('#modal').showModal();
+  try { const data = await api('/api/account/sessions'); $('#modal-fields').innerHTML = `<div class="session-list full">${data.sessions.map(item => `<article><div><strong>${item.current ? '当前设备' : '其他设备'} ${item.current ? '<span class="badge online">当前</span>' : ''}</strong><small>${escapeHTML(item.ip || '未知 IP')} · ${escapeHTML(item.userAgent || '旧版会话')}</small><small>登录：${new Date(item.createdAt).toLocaleString('zh-CN')} · 最近活动：${new Date(item.lastSeenAt).toLocaleString('zh-CN')}</small></div><button type="button" class="danger-button" data-session-revoke="${escapeHTML(item.id)}" data-current="${item.current}">${item.current ? '退出当前设备' : '远程退出'}</button></article>`).join('')}</div><p class="muted full">登录失败 5 次会自动锁定来源 IP 10 分钟。HTTPS 访问时 Cookie 会强制使用安全传输。</p>`; }
+  catch (error) { $('#modal-fields').innerHTML = ''; $('#modal-error').textContent = error.message; }
+}
 
 const pages = {
   dashboard: ['基础设施概览', '添加服务器'], servers: ['托管服务器', '添加服务器'],
@@ -147,6 +156,8 @@ $('#inspect-environment').addEventListener('click', () => openEnvironment($('#se
 $('#app-server-filter').addEventListener('change', renderAppsByServer);
 
 document.addEventListener('click', async (event) => {
+  const sessionRevoke = event.target.closest('[data-session-revoke]');
+  if (sessionRevoke) { if (!window.confirm(sessionRevoke.dataset.current === 'true' ? '确定退出当前设备吗？' : '确定让该设备退出吗？')) return; sessionRevoke.disabled = true; try { const result = await api(`/api/account/sessions/${encodeURIComponent(sessionRevoke.dataset.sessionRevoke)}`, { method: 'DELETE' }); if (result.current) { $('#modal').close(); showLogin(); } else { toast('该设备已远程退出'); await openSessions(); } } catch (error) { $('#modal-error').textContent = error.message; sessionRevoke.disabled = false; } return; }
   const inspectButton = event.target.closest('[data-env-inspect]');
   if (inspectButton) { await openEnvironment(inspectButton.dataset.envInspect); return; }
   const installButton = event.target.closest('[data-env-install]');

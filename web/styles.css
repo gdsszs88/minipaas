@@ -150,6 +150,10 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .domain-health-list dl div { padding: 8px; border-radius: 8px; background: #11151e; }
 .domain-health-list dt { color: var(--muted); font-size: 10px; }
 .domain-health-list dd { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.session-list { display: grid; gap: 9px; margin-top: 18px; }
+.session-list article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #0c0f15; }
+.session-list strong, .session-list small { display: block; }
+.session-list small { margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }
 .panel-head, .section-intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .panel h3, .section-intro h3 { margin: 0; font-size: 18px; }
 .panel-head a { color: var(--accent-2); font-size: 12px; text-decoration: none; }
