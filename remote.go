@@ -201,3 +201,30 @@ func (r *RemoteClient) Upload(ctx context.Context, localPath, remotePath string)
 	}
 	return sftpClient.Rename(temporary, remotePath)
 }
+
+func (r *RemoteClient) Download(ctx context.Context, remotePath string, destination io.Writer) error {
+	client, err := r.dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return err
+	}
+	defer sftpClient.Close()
+	source, err := sftpClient.Open(remotePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	done := make(chan error, 1)
+	go func() { _, copyErr := io.Copy(destination, source); done <- copyErr }()
+	select {
+	case <-ctx.Done():
+		_ = source.Close()
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}

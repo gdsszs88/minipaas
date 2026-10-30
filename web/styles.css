@@ -107,6 +107,16 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .revision-list strong, .revision-list small, .revision-list code { display: block; }
 .revision-list small { margin: 4px 0; color: var(--muted); }
 .revision-list code { max-width: 340px; color: var(--accent-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 10px; }
+.backup-toolbar strong, .backup-toolbar small { display: block; }
+.backup-toolbar small { margin-top: 4px; color: var(--muted); }
+.backup-list { display: grid; gap: 8px; }
+.backup-list article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #0c0f15; }
+.backup-list article > div:last-child { display: flex; gap: 7px; }
+.backup-list strong, .backup-list small { display: block; }
+.backup-list small { margin-top: 5px; color: var(--muted); }
+.link-button { display: inline-flex; align-items: center; text-decoration: none; font-size: 12px; }
+.danger-button { padding: 8px 11px; color: var(--red); border: 1px solid rgba(251,113,133,.35); border-radius: 8px; background: rgba(251,113,133,.07); }
 .panel-head, .section-intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .panel h3, .section-intro h3 { margin: 0; font-size: 18px; }
 .panel-head a { color: var(--accent-2); font-size: 12px; text-decoration: none; }

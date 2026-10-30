@@ -101,24 +101,34 @@ type App struct {
 }
 
 type Database struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Engine         string    `json:"engine"`
-	Version        string    `json:"version"`
-	ServerID       string    `json:"serverId"`
-	Status         string    `json:"status"`
-	StorageGB      int       `json:"storageGB"`
-	Username       string    `json:"username,omitempty"`
-	DatabaseName   string    `json:"databaseName,omitempty"`
-	Host           string    `json:"host,omitempty"`
-	Port           int       `json:"port,omitempty"`
-	PasswordCipher string    `json:"passwordCipher,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
-	ManagedMode    string    `json:"managedMode,omitempty"`
-	Namespace      string    `json:"namespace,omitempty"`
-	Workload       string    `json:"workload,omitempty"`
-	ServiceName    string    `json:"serviceName,omitempty"`
-	PVCName        string    `json:"pvcName,omitempty"`
+	ID             string           `json:"id"`
+	Name           string           `json:"name"`
+	Engine         string           `json:"engine"`
+	Version        string           `json:"version"`
+	ServerID       string           `json:"serverId"`
+	Status         string           `json:"status"`
+	StorageGB      int              `json:"storageGB"`
+	Username       string           `json:"username,omitempty"`
+	DatabaseName   string           `json:"databaseName,omitempty"`
+	Host           string           `json:"host,omitempty"`
+	Port           int              `json:"port,omitempty"`
+	PasswordCipher string           `json:"passwordCipher,omitempty"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	ManagedMode    string           `json:"managedMode,omitempty"`
+	Namespace      string           `json:"namespace,omitempty"`
+	Workload       string           `json:"workload,omitempty"`
+	ServiceName    string           `json:"serviceName,omitempty"`
+	PVCName        string           `json:"pvcName,omitempty"`
+	Backups        []DatabaseBackup `json:"backups,omitempty"`
+}
+
+type DatabaseBackup struct {
+	ID         string    `json:"id"`
+	Filename   string    `json:"filename"`
+	RemotePath string    `json:"remotePath,omitempty"`
+	Size       int64     `json:"size"`
+	CreatedAt  time.Time `json:"createdAt"`
+	Reason     string    `json:"reason,omitempty"`
 }
 
 type AuditEvent struct {
@@ -764,6 +774,9 @@ func (a *API) databases(w http.ResponseWriter, r *http.Request) {
 		items := a.store.Snapshot().Databases
 		for i := range items {
 			items[i].PasswordCipher = ""
+			for j := range items[i].Backups {
+				items[i].Backups[j].RemotePath = ""
+			}
 		}
 		writeJSON(w, 200, items)
 	case http.MethodPost:
@@ -889,6 +902,10 @@ func main() {
 	mux.Handle("POST /api/databases/{id}/provision", api.auth(http.HandlerFunc(api.databaseProvision)))
 	mux.Handle("GET /api/databases/{id}/details", api.auth(http.HandlerFunc(api.databaseDetails)))
 	mux.Handle("PUT /api/databases/{id}/name", api.auth(http.HandlerFunc(api.databaseRename)))
+	mux.Handle("GET /api/databases/{id}/backups", api.auth(http.HandlerFunc(api.databaseBackups)))
+	mux.Handle("POST /api/databases/{id}/backups", api.auth(http.HandlerFunc(api.databaseBackupCreate)))
+	mux.Handle("GET /api/databases/{id}/backups/{backupId}/download", api.auth(http.HandlerFunc(api.databaseBackupDownload)))
+	mux.Handle("POST /api/databases/{id}/backups/{backupId}/restore", api.auth(http.HandlerFunc(api.databaseBackupRestore)))
 	mux.Handle("PUT /api/databases/{id}", api.auth(http.HandlerFunc(api.databaseUpdate)))
 	mux.Handle("DELETE /api/databases/{id}", api.auth(http.HandlerFunc(api.databaseDelete)))
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
