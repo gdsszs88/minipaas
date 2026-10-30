@@ -52,13 +52,15 @@ function renderDashboard(data) {
   $('#metrics').innerHTML = [metric('服务器', data.servers, `${data.onlineServers} 台在线`), metric('应用', data.apps, `${data.runningApps} 个运行中`), metric('数据库', data.databases, '持久化服务'), metric('平台状态', '正常', '控制平面可用')].join('');
   $('#server-summary').className = state.servers.length ? 'card-grid' : 'empty-state';
   $('#server-summary').innerHTML = state.servers.length ? state.servers.slice(0,3).map(serverCard).join('') : '暂无服务器，先添加一台 VPS。';
-  renderAudit(data.audit, '#audit-summary'); state.audit = data.audit;
+  renderAudit((data.audit || []).slice(-8), '#audit-summary');
 }
 function serverCard(s) { const m = state.monitoring[s.id]; return `<article class="resource-card"><div class="card-top"><div><h4>${escapeHTML(s.name)}</h4><p>${escapeHTML(s.user)}@${escapeHTML(s.host)}:${s.port} · ${s.authType === 'password' ? '密码登录' : '密钥登录'}</p></div><span class="badge ${s.status}">${escapeHTML(statusText(s.status))}</span></div><p>${s.environmentReady ? '<span class="ready-text">✓ 网站部署环境已完全就绪</span>' : s.k3sVersion ? `K3s ${escapeHTML(s.k3sVersion)} · 请检查完整环境` : '等待环境初始化'}</p><p>${m ? `CPU ${m.cpuPercent}% · 内存 ${m.memoryPercent}% · 磁盘 ${m.diskPercent}%` : s.cpu ? `${s.cpu} CPU · ${s.memoryMB} MB · ${s.diskGB} GB` : '尚未读取硬件信息'}</p><div class="card-actions"><button data-server-edit="${escapeHTML(s.id)}">编辑</button><button data-server-action="test" data-id="${escapeHTML(s.id)}">检测连接</button><button data-env-inspect="${escapeHTML(s.id)}">初始化环境</button><button data-server-action="adopt" data-id="${escapeHTML(s.id)}">扫描并接管</button><button class="danger" data-delete-type="server" data-id="${escapeHTML(s.id)}">删除</button></div></article>`; }
 function serverName(id) { return state.servers.find(server => server.id === id)?.name || '未知服务器'; }
 function appCard(a) { const domains = (a.domains || []).map(d => d.host).join(' · '), adopted = a.managedMode === 'adopted'; return `<article class="resource-card"><div class="card-top"><div><span class="server-chip">▤ ${escapeHTML(serverName(a.serverId))}</span><h4>${escapeHTML(a.name)}</h4><p>${adopted ? `${escapeHTML(a.namespace)} · 现有 K3s 服务` : escapeHTML(a.repository || a.archiveName || (a.sourceType === 'image' ? '本地归档镜像' : '本地源码'))}</p></div><span class="badge ${a.status}">${escapeHTML(statusText(a.status))}</span></div><p>${domains ? escapeHTML(domains) : '尚未绑定域名'}</p><p>${adopted ? '已无停机接管' : `${escapeHTML(a.buildType)} · 端口 ${a.port || 8080} · 自动部署${a.autoDeploy ? '已开启' : '未开启'}`}</p>${a.autoDeployError ? `<p class="error">${escapeHTML(a.autoDeployError)}</p>` : ''}<div class="card-actions">${adopted ? '' : `<button data-app-config="${escapeHTML(a.id)}">编辑配置</button>`}<button data-adopted-domains="${escapeHTML(a.id)}">编辑域名</button>${domains ? `<button data-domain-health="${escapeHTML(a.id)}">域名状态</button>` : ''}${adopted ? `<button data-app-promote="${escapeHTML(a.id)}">转为原生管理</button>` : ''}<button data-app-action="deploy" data-id="${escapeHTML(a.id)}">${adopted ? '重启服务' : a.status === 'running' ? '重新部署' : '开始部署'}</button><button data-app-runtime-log="${escapeHTML(a.id)}">运行日志</button>${!adopted ? `<button data-app-history="${escapeHTML(a.id)}">版本/回滚</button>` : ''}${a.deployLog ? `<button data-app-log="${escapeHTML(a.id)}">构建日志</button>` : ''}<button class="danger" data-delete-type="app" data-id="${escapeHTML(a.id)}">${adopted ? '移出面板' : '删除'}</button></div></article>`; }
 function dbCard(d) { const adopted = d.managedMode === 'adopted'; return `<article class="resource-card"><div class="card-top"><div><h4>${escapeHTML(d.name)}</h4><p>${escapeHTML(d.engine)} ${escapeHTML(d.version)}</p></div><span class="badge ${d.status}">${escapeHTML(statusText(d.status))}</span></div><p>${d.storageGB} GB 持久卷${adopted ? ' · 已独立接管' : ''}</p><p>${d.host ? `${escapeHTML(d.host)}:${d.port}` : '等待部署'}</p><div class="card-actions">${d.status === 'running' ? `<button data-db-view="${escapeHTML(d.id)}">查看数据库</button>${['postgresql','postgres'].includes(d.engine) ? `<button data-db-backups="${escapeHTML(d.id)}">备份/恢复</button>` : ''}` : ''}<button data-db-rename="${escapeHTML(d.id)}">修改名称</button>${!adopted && d.status !== 'running' ? `<button data-db-edit="${escapeHTML(d.id)}">编辑配置</button>` : ''}${adopted ? '' : `<button data-db-action="provision" data-id="${escapeHTML(d.id)}">${d.status === 'running' ? '重新检查/部署' : '开始部署'}</button>`}<button class="danger" data-delete-type="database" data-id="${escapeHTML(d.id)}">${adopted ? '移出面板' : '永久删除'}</button></div></article>`; }
-function renderAudit(items, selector) { $(selector).innerHTML = items.length ? [...items].reverse().map(e => `<div class="timeline-item"><span></span><div>${escapeHTML(e.message)}<br><small class="muted">${escapeHTML(e.action)}</small></div><time>${ago(e.createdAt)}</time></div>`).join('') : '<div class="empty-state">暂无操作记录</div>'; }
+function renderAudit(items, selector) { $(selector).innerHTML = items.length ? [...items].reverse().map(e => `<div class="timeline-item"><span></span><div>${escapeHTML(e.message)}<br><small class="muted">${escapeHTML(e.action)} · ${escapeHTML(e.resource || '-')}</small></div><time title="${new Date(e.createdAt).toLocaleString('zh-CN')}">${ago(e.createdAt)}</time></div>`).join('') : '<div class="empty-state">暂无符合条件的操作记录</div>'; }
+function filteredAudit() { const q = ($('#audit-search')?.value || '').trim().toLowerCase(), type = $('#audit-filter')?.value || ''; return state.audit.filter(e => (!type || e.action.startsWith(`${type}.`)) && (!q || `${e.action} ${e.resource} ${e.message}`.toLowerCase().includes(q))); }
+function renderFullAudit() { const items = filteredAudit(); renderAudit(items, '#audit-list'); $('#audit-count').textContent = `${items.length}/${state.audit.length} 条`; }
 function renderLists() {
   $('#servers-list').innerHTML = state.servers.length ? state.servers.map(serverCard).join('') : '<div class="empty-state">尚未添加服务器</div>';
   $('#setup-server').innerHTML = state.servers.length ? state.servers.map(s => `<option value="${escapeHTML(s.id)}">${escapeHTML(s.name)} · ${escapeHTML(s.host)}</option>`).join('') : '<option value="">请先添加服务器</option>';
@@ -67,7 +69,7 @@ function renderLists() {
   if (state.servers.some(s => s.id === previousFilter)) $('#app-server-filter').value = previousFilter;
   renderAppsByServer();
   $('#databases-list').innerHTML = state.databases.length ? state.databases.map(dbCard).join('') : '<div class="empty-state">尚未创建数据库</div>';
-  renderAudit(state.audit, '#audit-list');
+  renderFullAudit();
 }
 function renderAppsByServer() { const filter = $('#app-server-filter').value; const apps = filter ? state.apps.filter(a => a.serverId === filter) : state.apps; if (!apps.length) { $('#apps-list').innerHTML = '<div class="empty-state">该服务器尚未部署应用</div>'; return; } const groups = []; const ids = [...new Set(apps.map(a => a.serverId))]; ids.forEach(id => { const items = apps.filter(a => a.serverId === id); groups.push(`<section class="app-server-group"><div class="group-head"><div><span class="status-dot"></span><strong>${escapeHTML(serverName(id))}</strong></div><small>${items.length} 个应用</small></div><div class="card-grid">${items.map(appCard).join('')}</div></section>`); }); $('#apps-list').innerHTML = groups.join(''); }
 
@@ -91,8 +93,8 @@ async function startEnvironmentInstall(serverId, mode) {
   setTimeout(poll, 700);
 }
 async function refresh() {
-  const [dashboard, servers, apps, databases] = await Promise.all([api('/api/dashboard'), api('/api/servers'), api('/api/apps'), api('/api/databases')]);
-  Object.assign(state, { servers, apps, databases, audit: dashboard.audit }); renderDashboard(dashboard); renderLists(); navigate(location.hash.slice(1) || 'dashboard');
+  const [dashboard, servers, apps, databases, audit] = await Promise.all([api('/api/dashboard'), api('/api/servers'), api('/api/apps'), api('/api/databases'), api('/api/audit')]);
+  Object.assign(state, { servers, apps, databases, audit: audit.events || [] }); renderDashboard(dashboard); renderLists(); navigate(location.hash.slice(1) || 'dashboard');
   refreshMonitoring();
 }
 function uptimeText(seconds = 0) { const days = Math.floor(seconds/86400), hours = Math.floor((seconds%86400)/3600); return days ? `${days} 天 ${hours} 小时` : `${hours} 小时`; }
@@ -154,6 +156,10 @@ $('#modal-form').addEventListener('submit', async (event) => {
 $('#modal-fields').addEventListener('change', event => { if (event.target.name === 'sourceType') updateSourceFields(); if (event.target.name === 'authType') updateServerAuthFields(); });
 $('#inspect-environment').addEventListener('click', () => openEnvironment($('#setup-server').value));
 $('#app-server-filter').addEventListener('change', renderAppsByServer);
+$('#audit-search').addEventListener('input', renderFullAudit);
+$('#audit-filter').addEventListener('change', renderFullAudit);
+$('#audit-export').addEventListener('click', () => { const blob = new Blob([JSON.stringify(filteredAudit(), null, 2)], { type: 'application/json' }), link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `minipaas-audit-${new Date().toISOString().slice(0,10)}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); });
+$('#audit-cleanup').addEventListener('click', async () => { if (!window.confirm('确定清理 90 天以前的操作记录吗？最近 90 天记录会保留。')) return; try { const result = await api('/api/audit?days=90', { method: 'DELETE' }); toast(`已清理 ${result.removed} 条旧记录`); await refresh(); } catch (error) { toast(error.message); } });
 
 document.addEventListener('click', async (event) => {
   const sessionRevoke = event.target.closest('[data-session-revoke]');

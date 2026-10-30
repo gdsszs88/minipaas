@@ -538,6 +538,42 @@ func (a *API) dashboard(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func (a *API) auditLog(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s := a.store.Snapshot()
+		writeJSON(w, http.StatusOK, map[string]any{"events": s.Audit, "count": len(s.Audit)})
+	case http.MethodDelete:
+		days, err := strconv.Atoi(r.URL.Query().Get("days"))
+		if err != nil || days < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "days 必须是大于 0 的整数"})
+			return
+		}
+		cutoff := time.Now().AddDate(0, 0, -days)
+		removed := 0
+		err = a.store.mutate(func(s *State) error {
+			kept := s.Audit[:0]
+			for _, event := range s.Audit {
+				if event.CreatedAt.Before(cutoff) {
+					removed++
+				} else {
+					kept = append(kept, event)
+				}
+			}
+			s.Audit = kept
+			appendAudit(s, "audit.cleanup", "audit", fmt.Sprintf("已清理 %d 条超过 %d 天的操作记录", removed, days), map[string]any{"removed": removed, "days": days})
+			return nil
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
 func countServers(items []Server, status string) int {
 	n := 0
 	for _, v := range items {
@@ -1047,6 +1083,8 @@ func main() {
 	mux.Handle("GET /api/account/sessions", api.auth(http.HandlerFunc(api.accountSessions)))
 	mux.Handle("DELETE /api/account/sessions/{id}", api.auth(http.HandlerFunc(api.accountSessions)))
 	mux.Handle("GET /api/dashboard", api.auth(http.HandlerFunc(api.dashboard)))
+	mux.Handle("GET /api/audit", api.auth(http.HandlerFunc(api.auditLog)))
+	mux.Handle("DELETE /api/audit", api.auth(http.HandlerFunc(api.auditLog)))
 	mux.Handle("GET /api/monitoring", api.auth(http.HandlerFunc(api.monitoring)))
 	mux.Handle("/api/servers", api.auth(http.HandlerFunc(api.servers)))
 	mux.Handle("POST /api/servers/{id}/{action}", api.auth(http.HandlerFunc(api.serverAction)))

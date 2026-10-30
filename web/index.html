@@ -88,7 +88,7 @@
       </section>
 
       <section id="activity-page" class="page">
-        <article class="panel"><div class="panel-head"><div><p class="eyebrow">AUDIT LOG</p><h3>操作记录</h3></div></div><div id="audit-list" class="timeline"></div></article>
+        <article class="panel"><div class="panel-head"><div><p class="eyebrow">AUDIT LOG</p><h3>操作记录 <small id="audit-count"></small></h3></div></div><div class="audit-toolbar"><input id="audit-search" type="search" placeholder="搜索操作、资源或内容"><select id="audit-filter"><option value="">全部类型</option><option value="security">登录与安全</option><option value="server">服务器</option><option value="app">应用部署</option><option value="database">数据库</option><option value="audit">记录管理</option></select><button id="audit-export" class="secondary">导出 JSON</button><button id="audit-cleanup" class="danger-button">清理 90 天前</button></div><div id="audit-list" class="timeline"></div></article>
       </section>
     </main>
   </div>
