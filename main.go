@@ -1109,6 +1109,7 @@ func main() {
 	mux.Handle("DELETE /api/apps/{id}", api.auth(http.HandlerFunc(api.appDelete)))
 	mux.Handle("/api/databases", api.auth(http.HandlerFunc(api.databases)))
 	mux.Handle("POST /api/databases/{id}/provision", api.auth(http.HandlerFunc(api.databaseProvision)))
+	mux.Handle("POST /api/databases/{id}/runtime/{action}", api.auth(http.HandlerFunc(api.databaseRuntimeControl)))
 	mux.Handle("GET /api/databases/{id}/details", api.auth(http.HandlerFunc(api.databaseDetails)))
 	mux.Handle("PUT /api/databases/{id}/name", api.auth(http.HandlerFunc(api.databaseRename)))
 	mux.Handle("GET /api/databases/{id}/backups", api.auth(http.HandlerFunc(api.databaseBackups)))

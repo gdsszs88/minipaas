@@ -123,6 +123,63 @@ k3s kubectl -n minipaas-data get statefulset,service,pvc -l app.kubernetes.io/na
 	writeJSON(w, 200, map[string]any{"ok": true, "engine": database.Engine, "host": details["host"], "port": details["port"], "username": details["username"], "password": password, "database": details["database"], "url": connectionURL(database.Engine, details["username"], password, details["host"], details["port"], details["database"]), "output": tailText(output, 6000)})
 }
 
+func (a *API) databaseRuntimeControl(w http.ResponseWriter, r *http.Request) {
+	database, server, err := a.databaseAndServer(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	action := r.PathValue("action")
+	if action != "start" && action != "stop" && action != "restart" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的数据库操作"})
+		return
+	}
+	namespace, workload, err := databaseWorkload(database)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	key, err := a.secrets.Decrypt(server.Credential)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "无法读取服务器凭据"})
+		return
+	}
+	var script string
+	switch action {
+	case "stop":
+		script = fmt.Sprintf("set -e\nk3s kubectl -n %s scale %s --replicas=0\nk3s kubectl -n %s get %s -o wide", namespace, workload, namespace, workload)
+	case "start":
+		script = fmt.Sprintf("set -e\nk3s kubectl -n %s scale %s --replicas=1\nk3s kubectl -n %s rollout status %s --timeout=300s", namespace, workload, namespace, workload)
+	case "restart":
+		script = fmt.Sprintf("set -e\nk3s kubectl -n %s scale %s --replicas=1\nk3s kubectl -n %s rollout restart %s\nk3s kubectl -n %s rollout status %s --timeout=300s", namespace, workload, namespace, workload, namespace, workload)
+	}
+	client := RemoteClient{Server: server, PrivateKey: key}
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Minute)
+	defer cancel()
+	output, runErr := client.run(ctx, script, 5*time.Minute)
+	if runErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "数据库操作失败", "output": tailText(output, 6000)})
+		return
+	}
+	status, message := "running", "已启动数据库 "+database.Name
+	if action == "stop" {
+		status, message = "stopped", "已停止数据库 "+database.Name
+	}
+	if action == "restart" {
+		message = "已重启数据库 " + database.Name
+	}
+	_ = a.store.mutate(func(s *State) error {
+		for i := range s.Databases {
+			if s.Databases[i].ID == database.ID {
+				s.Databases[i].Status = status
+			}
+		}
+		appendAudit(s, "database."+action, database.ID, message, nil)
+		return nil
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": status, "output": tailText(output, 6000)})
+}
+
 func databaseManifest(database Database, password string) ([]byte, map[string]string, error) {
 	engine := strings.ToLower(database.Engine)
 	name := "db-" + kubeName(database.Name) + "-" + idSuffix(database.ID)
