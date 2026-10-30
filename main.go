@@ -1097,6 +1097,7 @@ func main() {
 	mux.Handle("/api/apps", api.auth(http.HandlerFunc(api.apps)))
 	mux.Handle("POST /api/apps/upload", api.auth(http.HandlerFunc(api.appUpload)))
 	mux.Handle("POST /api/apps/{id}/deploy", api.auth(http.HandlerFunc(api.appDeploy)))
+	mux.Handle("POST /api/apps/{id}/runtime/{action}", api.auth(http.HandlerFunc(api.appRuntimeControl)))
 	mux.Handle("GET /api/apps/{id}/history", api.auth(http.HandlerFunc(api.appHistory)))
 	mux.Handle("POST /api/apps/{id}/rollback", api.auth(http.HandlerFunc(api.appRollback)))
 	mux.Handle("GET /api/apps/{id}/runtime-logs", api.auth(http.HandlerFunc(api.appRuntimeLogs)))

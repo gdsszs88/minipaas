@@ -160,6 +160,67 @@ func (a *API) appDeploy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "image": image, "output": tailText(output, 12000)})
 }
 
+func (a *API) appRuntimeControl(w http.ResponseWriter, r *http.Request) {
+	app, server, err := a.findAppAndServer(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	action := r.PathValue("action")
+	if action != "start" && action != "stop" && action != "restart" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的运行操作"})
+		return
+	}
+	namespace, workload := "minipaas-apps", "mp-"+kubeName(app.Name)+"-"+idSuffix(app.ID)
+	if app.ManagedMode == "adopted" {
+		namespace, workload = app.Namespace, app.Workload
+	}
+	if !kubeResourcePattern.MatchString(namespace) || !kubeResourcePattern.MatchString(workload) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "应用资源标识不安全"})
+		return
+	}
+	key, err := a.secrets.Decrypt(server.Credential)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "无法读取服务器凭据"})
+		return
+	}
+	var script string
+	switch action {
+	case "stop":
+		script = fmt.Sprintf("set -e\nk3s kubectl -n %s scale deployment/%s --replicas=0\nk3s kubectl -n %s get deployment/%s -o wide", namespace, workload, namespace, workload)
+	case "start":
+		script = fmt.Sprintf("set -e\nk3s kubectl -n %s scale deployment/%s --replicas=1\nk3s kubectl -n %s rollout status deployment/%s --timeout=240s", namespace, workload, namespace, workload)
+	case "restart":
+		script = fmt.Sprintf("set -e\nk3s kubectl -n %s scale deployment/%s --replicas=1\nk3s kubectl -n %s rollout restart deployment/%s\nk3s kubectl -n %s rollout status deployment/%s --timeout=240s", namespace, workload, namespace, workload, namespace, workload)
+	}
+	client := RemoteClient{Server: server, PrivateKey: key}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	output, runErr := client.run(ctx, script, 4*time.Minute)
+	if runErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "应用操作失败", "output": tailText(output, 6000)})
+		return
+	}
+	status := "running"
+	message := "已启动应用 " + app.Name
+	if action == "stop" {
+		status, message = "stopped", "已停止应用 "+app.Name
+	}
+	if action == "restart" {
+		message = "已重启应用 " + app.Name
+	}
+	_ = a.store.mutate(func(s *State) error {
+		for i := range s.Apps {
+			if s.Apps[i].ID == app.ID {
+				s.Apps[i].Status, s.Apps[i].UpdatedAt, s.Apps[i].DeployLog = status, time.Now(), tailText(output, 12000)
+			}
+		}
+		appendAudit(s, "app."+action, app.ID, message, nil)
+		return nil
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": status, "output": tailText(output, 6000)})
+}
+
 func appendRevision(items []DeploymentRevision, revision DeploymentRevision) []DeploymentRevision {
 	if revision.DeployedAt.IsZero() {
 		revision.DeployedAt = time.Now()
