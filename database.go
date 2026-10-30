@@ -3,16 +3,20 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var databaseTablePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
 func randomPassword() string {
 	b := make([]byte, 18)
@@ -174,4 +178,118 @@ func connectionURL(engine, username, password, host, port, database string) stri
 		u.RawQuery = "sslmode=disable"
 	}
 	return u.String()
+}
+
+func (a *API) databaseDetails(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	state := a.store.Snapshot()
+	var database Database
+	found := false
+	for _, item := range state.Databases {
+		if item.ID == id {
+			database, found = item, true
+			break
+		}
+	}
+	if !found {
+		writeJSON(w, 404, map[string]string{"error": "数据库不存在"})
+		return
+	}
+	password := ""
+	if database.PasswordCipher != "" {
+		if plain, err := a.secrets.Decrypt(database.PasswordCipher); err == nil {
+			password = string(plain)
+		}
+	}
+	result := map[string]any{
+		"id": database.ID, "name": database.Name, "engine": database.Engine, "version": database.Version,
+		"host": database.Host, "port": database.Port, "username": database.Username, "password": password,
+		"database": database.DatabaseName, "managedMode": database.ManagedMode,
+	}
+	if password != "" {
+		result["url"] = connectionURL(database.Engine, database.Username, password, database.Host, strconv.Itoa(database.Port), database.DatabaseName)
+	}
+	if database.Status != "running" || (database.Engine != "postgresql" && database.Engine != "postgres") {
+		result["tables"] = []any{}
+		writeJSON(w, 200, result)
+		return
+	}
+	var server Server
+	for _, item := range state.Servers {
+		if item.ID == database.ServerID {
+			server = item
+			break
+		}
+	}
+	key, err := a.secrets.Decrypt(server.Credential)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "无法读取服务器凭据"})
+		return
+	}
+	namespace, target := "minipaas-data", "statefulset/db-"+kubeName(database.Name)+"-"+idSuffix(database.ID)
+	if database.ManagedMode == "adopted" {
+		namespace, target = database.Namespace, "deployment/"+database.Workload
+	}
+	table := strings.TrimSpace(r.URL.Query().Get("table"))
+	if table != "" && !databaseTablePattern.MatchString(table) {
+		writeJSON(w, 400, map[string]string{"error": "数据表名称格式不正确"})
+		return
+	}
+	sql := `SELECT COALESCE(json_agg(t),'[]'::json) FROM (SELECT relname AS name,n_live_tup AS rows FROM pg_stat_user_tables ORDER BY relname) t;`
+	if table != "" {
+		sql = fmt.Sprintf(`SELECT COALESCE(json_agg(t),'[]'::json) FROM (SELECT * FROM "%s" LIMIT 100) t;`, table)
+	}
+	sqlEncoded := base64.StdEncoding.EncodeToString([]byte(sql))
+	script := fmt.Sprintf(`set -eu
+k3s kubectl -n %s exec %s -- sh -lc 'sql=$(printf %%s %s | base64 -d); psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$sql"'
+`, namespace, target, sqlEncoded)
+	client := RemoteClient{Server: server, PrivateKey: key}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	out, runErr := client.run(ctx, script, 40*time.Second)
+	if runErr != nil {
+		writeJSON(w, 502, map[string]string{"error": "读取数据库失败", "output": tailText(out, 1200)})
+		return
+	}
+	var rows any
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &rows) != nil {
+		writeJSON(w, 502, map[string]string{"error": "数据库返回内容无法解析"})
+		return
+	}
+	if table == "" {
+		result["tables"] = rows
+	} else {
+		result["table"], result["rows"] = table, rows
+	}
+	writeJSON(w, 200, result)
+}
+
+func (a *API) databaseRename(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		writeJSON(w, 400, map[string]string{"error": "显示名称不能为空"})
+		return
+	}
+	err := a.store.mutate(func(s *State) error {
+		for i := range s.Databases {
+			if s.Databases[i].ID == r.PathValue("id") {
+				s.Databases[i].Name = input.Name
+				appendAudit(s, "database.rename", s.Databases[i].ID, "已修改数据库显示名称："+input.Name, nil)
+				return nil
+			}
+		}
+		return errors.New("数据库不存在")
+	})
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }

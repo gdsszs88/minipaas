@@ -204,6 +204,36 @@ func (a *API) passwordMatches(value string) bool {
 	return subtle.ConstantTimeCompare(given[:], a.password[:]) == 1
 }
 
+func (a *API) sessionsPath() string { return filepath.Join(a.dataDir, "sessions.json") }
+
+func (a *API) loadSessions() {
+	b, err := os.ReadFile(a.sessionsPath())
+	if err != nil {
+		return
+	}
+	var saved map[string]session
+	if json.Unmarshal(b, &saved) != nil {
+		return
+	}
+	now := time.Now()
+	for token, item := range saved {
+		if item.Expires.After(now) {
+			a.sessions[token] = item
+		}
+	}
+}
+
+func (a *API) saveSessionsLocked() {
+	b, err := json.Marshal(a.sessions)
+	if err != nil {
+		return
+	}
+	tmp := a.sessionsPath() + ".tmp"
+	if os.WriteFile(tmp, b, 0600) == nil {
+		_ = os.Rename(tmp, a.sessionsPath())
+	}
+}
+
 func newID(prefix string) string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
@@ -249,6 +279,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	token := newID("sess") + newID("")
 	a.sessionMu.Lock()
 	a.sessions[token] = session{Expires: time.Now().Add(a.sessionTTL)}
+	a.saveSessionsLocked()
 	a.sessionMu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(a.sessionTTL.Seconds())})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expiresAt": time.Now().Add(a.sessionTTL)})
@@ -293,6 +324,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 			delete(a.sessions, token)
 		}
 	}
+	a.saveSessionsLocked()
 	a.sessionMu.Unlock()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
@@ -301,6 +333,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("minipaas_session"); err == nil {
 		a.sessionMu.Lock()
 		delete(a.sessions, c.Value)
+		a.saveSessionsLocked()
 		a.sessionMu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
@@ -318,6 +351,7 @@ func (a *API) auth(next http.Handler) http.Handler {
 		s, ok := a.sessions[c.Value]
 		if ok && time.Now().After(s.Expires) {
 			delete(a.sessions, c.Value)
+			a.saveSessionsLocked()
 			ok = false
 		}
 		a.sessionMu.Unlock()
@@ -802,6 +836,7 @@ func main() {
 		}
 	}
 	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}}
+	api.loadSessions()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", api.login)
@@ -826,6 +861,8 @@ func main() {
 	mux.Handle("DELETE /api/apps/{id}", api.auth(http.HandlerFunc(api.appDelete)))
 	mux.Handle("/api/databases", api.auth(http.HandlerFunc(api.databases)))
 	mux.Handle("POST /api/databases/{id}/provision", api.auth(http.HandlerFunc(api.databaseProvision)))
+	mux.Handle("GET /api/databases/{id}/details", api.auth(http.HandlerFunc(api.databaseDetails)))
+	mux.Handle("PUT /api/databases/{id}/name", api.auth(http.HandlerFunc(api.databaseRename)))
 	mux.Handle("PUT /api/databases/{id}", api.auth(http.HandlerFunc(api.databaseUpdate)))
 	mux.Handle("DELETE /api/databases/{id}", api.auth(http.HandlerFunc(api.databaseDelete)))
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
