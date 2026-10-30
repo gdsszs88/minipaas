@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -301,6 +302,18 @@ func (a *API) saveSessionsLocked() {
 	}
 }
 
+func (a *API) recordSecurityAudit(action, message string, r *http.Request, metadata map[string]any) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["ip"] = clientIP(r)
+	metadata["userAgent"] = r.UserAgent()
+	_ = a.store.mutate(func(s *State) error {
+		appendAudit(s, action, "account", message, metadata)
+		return nil
+	})
+}
+
 func newID(prefix string) string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
@@ -357,13 +370,18 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 			failure = loginFailure{WindowStart: now}
 		}
 		failure.Count++
+		justBlocked := false
 		if failure.Count >= 5 {
 			failure.BlockedUntil = now.Add(10 * time.Minute)
+			justBlocked = failure.Count == 5
 		}
 		a.loginFailures[ip] = failure
 		a.loginMu.Unlock()
 		time.Sleep(300 * time.Millisecond)
 		if failure.BlockedUntil.After(now) {
+			if justBlocked {
+				a.recordSecurityAudit("security.login_blocked", "登录失败过多，来源 IP 已临时锁定", r, nil)
+			}
 			w.Header().Set("Retry-After", "600")
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录失败次数过多，已临时锁定 10 分钟"})
 		} else {
@@ -380,6 +398,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	a.sessions[token] = session{ID: sessionID(token), CreatedAt: now, LastSeen: now, Expires: expires, IP: ip, UserAgent: r.UserAgent()}
 	a.saveSessionsLocked()
 	a.sessionMu.Unlock()
+	a.recordSecurityAudit("security.login", "管理员登录成功", r, map[string]any{"sessionId": sessionID(token)})
 	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: token, Path: "/", HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteStrictMode, MaxAge: int(a.sessionTTL.Seconds())})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expiresAt": expires})
 }
@@ -402,6 +421,7 @@ func (a *API) accountSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		a.saveSessionsLocked()
 		a.sessionMu.Unlock()
+		a.recordSecurityAudit("security.session_revoked", "已退出一个登录设备", r, map[string]any{"sessionId": id, "current": removedCurrent})
 		if removedCurrent {
 			http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteStrictMode})
 		}
@@ -465,6 +485,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	a.saveSessionsLocked()
 	a.sessionMu.Unlock()
+	a.recordSecurityAudit("security.password_changed", "管理员密码已修改，其他设备已退出", r, nil)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -475,6 +496,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		a.saveSessionsLocked()
 		a.sessionMu.Unlock()
 	}
+	a.recordSecurityAudit("security.logout", "管理员主动退出登录", r, nil)
 	http.SetCookie(w, &http.Cookie{Name: "minipaas_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -946,10 +968,31 @@ func appendAudit(s *State, action, resource, message string, meta map[string]any
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "已阻止跨站请求"})
+				return
+			}
+			if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+				parsed, err := url.Parse(origin)
+				if err != nil || !strings.EqualFold(parsed.Host, r.Host) {
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": "请求来源无效"})
+					return
+				}
+			}
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		if requestIsHTTPS(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
