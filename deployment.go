@@ -143,9 +143,13 @@ func (a *API) appDeploy(w http.ResponseWriter, r *http.Request) {
 			if state.Apps[i].ID != app.ID {
 				continue
 			}
+			if state.Apps[i].Image != "" && state.Apps[i].Image != image {
+				state.Apps[i].Revisions = appendRevision(state.Apps[i].Revisions, DeploymentRevision{ID: newID("rev"), Image: state.Apps[i].Image, GitCommit: state.Apps[i].GitCommit, DeployedAt: state.Apps[i].DeployedAt, Reason: "历史部署"})
+			}
 			state.Apps[i].Status, state.Apps[i].Image, state.Apps[i].DeployLog = "running", image, tailText(output, 20000)
 			state.Apps[i].DeployedAt, state.Apps[i].UpdatedAt = time.Now(), time.Now()
 			state.Apps[i].GitCommit, state.Apps[i].GitCheckedAt, state.Apps[i].AutoDeployError = gitCommit, time.Now(), ""
+			state.Apps[i].Revisions = appendRevision(state.Apps[i].Revisions, DeploymentRevision{ID: newID("rev"), Image: image, GitCommit: gitCommit, DeployedAt: state.Apps[i].DeployedAt, Reason: "部署成功"})
 			for j := range state.Apps[i].Domains {
 				state.Apps[i].Domains[j].Status = "active"
 			}
@@ -154,6 +158,142 @@ func (a *API) appDeploy(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	writeJSON(w, 200, map[string]any{"ok": true, "image": image, "output": tailText(output, 12000)})
+}
+
+func appendRevision(items []DeploymentRevision, revision DeploymentRevision) []DeploymentRevision {
+	if revision.DeployedAt.IsZero() {
+		revision.DeployedAt = time.Now()
+	}
+	for _, item := range items {
+		if item.Image == revision.Image && item.GitCommit == revision.GitCommit {
+			return items
+		}
+	}
+	items = append(items, revision)
+	if len(items) > 12 {
+		items = items[len(items)-12:]
+	}
+	return items
+}
+
+func (a *API) appHistory(w http.ResponseWriter, r *http.Request) {
+	app, _, err := a.findAppAndServer(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		return
+	}
+	items := append([]DeploymentRevision(nil), app.Revisions...)
+	if app.Image != "" {
+		found := false
+		for _, item := range items {
+			if item.Image == app.Image {
+				found = true
+				break
+			}
+		}
+		if !found {
+			items = append(items, DeploymentRevision{ID: "current", Image: app.Image, GitCommit: app.GitCommit, DeployedAt: app.DeployedAt, Reason: "当前运行版本"})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"currentImage": app.Image, "managedMode": app.ManagedMode, "revisions": items})
+}
+
+func (a *API) appRollback(w http.ResponseWriter, r *http.Request) {
+	app, server, err := a.findAppAndServer(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		return
+	}
+	if app.ManagedMode == "adopted" {
+		writeJSON(w, 400, map[string]string{"error": "接管应用没有 MiniPaaS 构建版本，无法一键回滚"})
+		return
+	}
+	var input struct {
+		RevisionID string `json:"revisionId"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	var target DeploymentRevision
+	for _, item := range app.Revisions {
+		if item.ID == input.RevisionID {
+			target = item
+			break
+		}
+	}
+	if target.ID == "" || target.Image == "" {
+		writeJSON(w, 404, map[string]string{"error": "部署版本不存在"})
+		return
+	}
+	if target.Image == app.Image {
+		writeJSON(w, 400, map[string]string{"error": "该版本已经在运行"})
+		return
+	}
+	key, err := a.secrets.Decrypt(server.Credential)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "无法读取服务器凭据"})
+		return
+	}
+	name := "mp-" + kubeName(app.Name) + "-" + idSuffix(app.ID)
+	script := fmt.Sprintf(`set -euo pipefail
+image=$(printf '%%s' '%s' | base64 -d)
+k3s kubectl -n minipaas-apps set image deployment/%s "app=$image"
+k3s kubectl -n minipaas-apps rollout status deployment/%s --timeout=300s
+k3s kubectl -n minipaas-apps get deployment/%s -o wide
+`, shellB64(target.Image), name, name, name)
+	client := RemoteClient{Server: server, PrivateKey: key}
+	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Minute)
+	defer cancel()
+	out, runErr := client.run(ctx, script, 6*time.Minute)
+	if runErr != nil {
+		writeJSON(w, 502, map[string]string{"error": "回滚失败，原运行版本会继续提供服务", "output": tailText(out, 5000)})
+		return
+	}
+	_ = a.store.mutate(func(s *State) error {
+		for i := range s.Apps {
+			if s.Apps[i].ID != app.ID {
+				continue
+			}
+			s.Apps[i].Revisions = appendRevision(s.Apps[i].Revisions, DeploymentRevision{ID: newID("rev"), Image: app.Image, GitCommit: app.GitCommit, DeployedAt: app.DeployedAt, Reason: "回滚前版本"})
+			s.Apps[i].Image, s.Apps[i].GitCommit, s.Apps[i].Status = target.Image, target.GitCommit, "running"
+			s.Apps[i].DeployedAt, s.Apps[i].UpdatedAt, s.Apps[i].DeployLog = time.Now(), time.Now(), tailText(out, 12000)
+		}
+		appendAudit(s, "app.rollback", app.ID, "应用 "+app.Name+" 已回滚", map[string]any{"image": target.Image})
+		return nil
+	})
+	writeJSON(w, 200, map[string]any{"ok": true, "image": target.Image, "output": tailText(out, 5000)})
+}
+
+func (a *API) appRuntimeLogs(w http.ResponseWriter, r *http.Request) {
+	app, server, err := a.findAppAndServer(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		return
+	}
+	namespace, workload := "minipaas-apps", "mp-"+kubeName(app.Name)+"-"+idSuffix(app.ID)
+	if app.ManagedMode == "adopted" {
+		if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(app.Namespace) || !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(app.Workload) {
+			writeJSON(w, 400, map[string]string{"error": "接管资源标识不安全"})
+			return
+		}
+		namespace, workload = app.Namespace, app.Workload
+	}
+	key, err := a.secrets.Decrypt(server.Credential)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "无法读取服务器凭据"})
+		return
+	}
+	script := fmt.Sprintf(`k3s kubectl -n %s logs deployment/%s --tail=500 --timestamps=true 2>&1`, namespace, workload)
+	client := RemoteClient{Server: server, PrivateKey: key}
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	out, runErr := client.run(ctx, script, 30*time.Second)
+	if runErr != nil {
+		writeJSON(w, 502, map[string]string{"error": "读取运行日志失败", "output": tailText(out, 3000)})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"logs": tailText(out, 40000), "updatedAt": time.Now()})
 }
 
 func (a *API) frontendBuildEnv(app App) (string, error) {

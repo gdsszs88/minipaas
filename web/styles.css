@@ -102,6 +102,11 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .data-table { width: 100%; border-collapse: collapse; font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .data-table th, .data-table td { max-width: 320px; padding: 9px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .data-table th { position: sticky; top: 0; color: var(--accent-2); background: #11151e; }
+.revision-list { display: grid; gap: 9px; margin-top: 18px; }
+.revision-list article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #0c0f15; }
+.revision-list strong, .revision-list small, .revision-list code { display: block; }
+.revision-list small { margin: 4px 0; color: var(--muted); }
+.revision-list code { max-width: 340px; color: var(--accent-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-head, .section-intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .panel h3, .section-intro h3 { margin: 0; font-size: 18px; }
 .panel-head a { color: var(--accent-2); font-size: 12px; text-decoration: none; }

@@ -61,34 +61,43 @@ type Domain struct {
 	TargetPort int    `json:"targetPort"`
 }
 
+type DeploymentRevision struct {
+	ID         string    `json:"id"`
+	Image      string    `json:"image"`
+	GitCommit  string    `json:"gitCommit,omitempty"`
+	DeployedAt time.Time `json:"deployedAt"`
+	Reason     string    `json:"reason,omitempty"`
+}
+
 type App struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	ServerID        string     `json:"serverId"`
-	SourceType      string     `json:"sourceType"`
-	Repository      string     `json:"repository,omitempty"`
-	Branch          string     `json:"branch,omitempty"`
-	BuildType       string     `json:"buildType"`
-	Status          string     `json:"status"`
-	Image           string     `json:"image,omitempty"`
-	ArchiveName     string     `json:"archiveName,omitempty"`
-	UploadPath      string     `json:"-"`
-	Port            int        `json:"port,omitempty"`
-	DeployLog       string     `json:"deployLog,omitempty"`
-	DeployedAt      time.Time  `json:"deployedAt,omitempty"`
-	DatabaseID      string     `json:"databaseId,omitempty"`
-	Variables       []Variable `json:"variables,omitempty"`
-	Domains         []Domain   `json:"domains,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
-	ManagedMode     string     `json:"managedMode,omitempty"`
-	Namespace       string     `json:"namespace,omitempty"`
-	Workload        string     `json:"workload,omitempty"`
-	ServiceName     string     `json:"serviceName,omitempty"`
-	AutoDeploy      bool       `json:"autoDeploy,omitempty"`
-	GitCommit       string     `json:"gitCommit,omitempty"`
-	GitCheckedAt    time.Time  `json:"gitCheckedAt,omitempty"`
-	AutoDeployError string     `json:"autoDeployError,omitempty"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	ServerID        string               `json:"serverId"`
+	SourceType      string               `json:"sourceType"`
+	Repository      string               `json:"repository,omitempty"`
+	Branch          string               `json:"branch,omitempty"`
+	BuildType       string               `json:"buildType"`
+	Status          string               `json:"status"`
+	Image           string               `json:"image,omitempty"`
+	ArchiveName     string               `json:"archiveName,omitempty"`
+	UploadPath      string               `json:"-"`
+	Port            int                  `json:"port,omitempty"`
+	DeployLog       string               `json:"deployLog,omitempty"`
+	DeployedAt      time.Time            `json:"deployedAt,omitempty"`
+	DatabaseID      string               `json:"databaseId,omitempty"`
+	Variables       []Variable           `json:"variables,omitempty"`
+	Domains         []Domain             `json:"domains,omitempty"`
+	CreatedAt       time.Time            `json:"createdAt"`
+	UpdatedAt       time.Time            `json:"updatedAt"`
+	ManagedMode     string               `json:"managedMode,omitempty"`
+	Namespace       string               `json:"namespace,omitempty"`
+	Workload        string               `json:"workload,omitempty"`
+	ServiceName     string               `json:"serviceName,omitempty"`
+	AutoDeploy      bool                 `json:"autoDeploy,omitempty"`
+	GitCommit       string               `json:"gitCommit,omitempty"`
+	GitCheckedAt    time.Time            `json:"gitCheckedAt,omitempty"`
+	AutoDeployError string               `json:"autoDeployError,omitempty"`
+	Revisions       []DeploymentRevision `json:"revisions,omitempty"`
 }
 
 type Database struct {
@@ -868,6 +877,9 @@ func main() {
 	mux.Handle("/api/apps", api.auth(http.HandlerFunc(api.apps)))
 	mux.Handle("POST /api/apps/upload", api.auth(http.HandlerFunc(api.appUpload)))
 	mux.Handle("POST /api/apps/{id}/deploy", api.auth(http.HandlerFunc(api.appDeploy)))
+	mux.Handle("GET /api/apps/{id}/history", api.auth(http.HandlerFunc(api.appHistory)))
+	mux.Handle("POST /api/apps/{id}/rollback", api.auth(http.HandlerFunc(api.appRollback)))
+	mux.Handle("GET /api/apps/{id}/runtime-logs", api.auth(http.HandlerFunc(api.appRuntimeLogs)))
 	mux.Handle("GET /api/apps/{id}/variables", api.auth(http.HandlerFunc(api.appVariables)))
 	mux.Handle("POST /api/apps/{id}/promote", api.auth(http.HandlerFunc(api.promoteAdoptedApp)))
 	mux.Handle("PUT /api/apps/{id}/config", api.auth(http.HandlerFunc(api.appConfig)))
