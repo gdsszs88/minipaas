@@ -1,0 +1,156 @@
+const $ = (s) => document.querySelector(s);
+const state = { servers: [], apps: [], databases: [], audit: [], page: 'dashboard' };
+
+async function api(path, options = {}) {
+  const isForm = options.body instanceof FormData;
+  const response = await fetch(path, { ...options, headers: { ...(isForm ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) } });
+  if (response.status === 401) { showLogin(); throw new Error('请重新登录'); }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `请求失败：${response.status}`);
+  return body;
+}
+
+function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); }
+function escapeHTML(value = '') { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+function ago(date) { const seconds = Math.max(0, (Date.now() - new Date(date).getTime()) / 1000); if (seconds < 60) return '刚刚'; if (seconds < 3600) return `${Math.floor(seconds/60)} 分钟前`; if (seconds < 86400) return `${Math.floor(seconds/3600)} 小时前`; return new Date(date).toLocaleDateString('zh-CN'); }
+function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2400); }
+
+$('#login-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); $('#login-error').textContent = '';
+  try { await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) }); $('#password').value = ''; showApp(); await refresh(); }
+  catch (error) { $('#login-error').textContent = error.message; }
+});
+$('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); showLogin(); });
+$('#change-password').addEventListener('click', () => { $('#modal-form').dataset.kind = 'password'; $('#modal-eyebrow').textContent = 'SECURITY'; $('#modal-title').textContent = '修改管理员密码'; $('#modal-fields').innerHTML = `<label class="full">当前密码<input name="currentPassword" type="password" autocomplete="current-password" required></label><label class="full">新密码<input name="newPassword" type="password" autocomplete="new-password" required></label><label class="full">再次输入新密码<input name="confirmPassword" type="password" autocomplete="new-password" required></label>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); });
+
+const pages = {
+  dashboard: ['基础设施概览', '添加服务器'], servers: ['托管服务器', '添加服务器'],
+  apps: ['应用', '创建应用'], databases: ['数据库', '创建数据库'], activity: ['操作记录', '刷新']
+};
+function navigate(page) {
+  if (!pages[page]) page = 'dashboard'; state.page = page;
+  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `${page}-page`));
+  document.querySelectorAll('#nav a').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  $('#page-title').textContent = pages[page][0]; $('#page-action').textContent = pages[page][1];
+}
+window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
+
+function metric(label, value, detail) { return `<article class="metric"><small>${label}</small><strong>${value}</strong><small>${detail}</small></article>`; }
+function renderDashboard(data) {
+  $('#metrics').innerHTML = [metric('服务器', data.servers, `${data.onlineServers} 台在线`), metric('应用', data.apps, `${data.runningApps} 个运行中`), metric('数据库', data.databases, '持久化服务'), metric('平台状态', '正常', '控制平面可用')].join('');
+  $('#server-summary').className = state.servers.length ? 'card-grid' : 'empty-state';
+  $('#server-summary').innerHTML = state.servers.length ? state.servers.slice(0,3).map(serverCard).join('') : '暂无服务器，先添加一台 VPS。';
+  renderAudit(data.audit, '#audit-summary'); state.audit = data.audit;
+}
+function serverCard(s) { return `<article class="resource-card"><div class="card-top"><div><h4>${escapeHTML(s.name)}</h4><p>${escapeHTML(s.user)}@${escapeHTML(s.host)}:${s.port}</p></div><span class="badge ${s.status}">${escapeHTML(s.status)}</span></div><p>${s.k3sVersion ? `K3s ${escapeHTML(s.k3sVersion)}` : '等待环境初始化'}</p><p>${s.cpu ? `${s.cpu} CPU · ${s.memoryMB} MB · ${s.diskGB} GB` : '尚未读取硬件信息'}</p><div class="card-actions"><button data-server-edit="${escapeHTML(s.id)}">编辑</button><button data-server-action="test" data-id="${escapeHTML(s.id)}">检测连接</button><button data-env-inspect="${escapeHTML(s.id)}">初始化环境</button><button data-server-action="adopt" data-id="${escapeHTML(s.id)}">扫描并接管</button><button class="danger" data-delete-type="server" data-id="${escapeHTML(s.id)}">删除</button></div></article>`; }
+function appCard(a) { const domains = (a.domains || []).map(d => d.host).join(' · '), adopted = a.managedMode === 'adopted'; return `<article class="resource-card"><div class="card-top"><div><h4>${escapeHTML(a.name)}</h4><p>${adopted ? `${escapeHTML(a.namespace)} · 现有 K3s 服务` : escapeHTML(a.repository || a.archiveName || (a.sourceType === 'image' ? '本地归档镜像' : '本地源码'))}</p></div><span class="badge ${a.status}">${escapeHTML(a.status)}</span></div><p>${domains ? escapeHTML(domains) : '尚未绑定域名'}</p><p>${adopted ? '已无停机接管' : `${escapeHTML(a.buildType)} · 端口 ${a.port || 8080} · 自动部署${a.autoDeploy ? '已开启' : '未开启'}`}</p>${a.autoDeployError ? `<p class="error">${escapeHTML(a.autoDeployError)}</p>` : ''}<div class="card-actions">${adopted ? '' : `<button data-app-config="${escapeHTML(a.id)}">编辑配置</button>`}<button data-adopted-domains="${escapeHTML(a.id)}">编辑域名</button>${adopted ? `<button data-app-promote="${escapeHTML(a.id)}">转为原生管理</button>` : ''}<button data-app-action="deploy" data-id="${escapeHTML(a.id)}">${adopted ? '重启服务' : a.status === 'running' ? '重新部署' : '开始部署'}</button>${a.deployLog ? `<button data-app-log="${escapeHTML(a.id)}">查看日志</button>` : ''}<button class="danger" data-delete-type="app" data-id="${escapeHTML(a.id)}">${adopted ? '移出面板' : '删除'}</button></div></article>`; }
+function dbCard(d) { const adopted = d.managedMode === 'adopted'; return `<article class="resource-card"><div class="card-top"><div><h4>${escapeHTML(d.name)}</h4><p>${escapeHTML(d.engine)} ${escapeHTML(d.version)}</p></div><span class="badge ${d.status}">${escapeHTML(d.status)}</span></div><p>${d.storageGB} GB 持久卷${adopted ? ' · 已无停机接管' : ''}</p><p>${d.host ? `${escapeHTML(d.host)}:${d.port}` : '等待部署'}</p><div class="card-actions">${!adopted && d.status !== 'running' ? `<button data-db-edit="${escapeHTML(d.id)}">编辑</button>` : ''}${adopted ? '' : `<button data-db-action="provision" data-id="${escapeHTML(d.id)}">${d.status === 'running' ? '重新检查/部署' : '开始部署'}</button>`}<button class="danger" data-delete-type="database" data-id="${escapeHTML(d.id)}">${adopted ? '移出面板' : '永久删除'}</button></div></article>`; }
+function renderAudit(items, selector) { $(selector).innerHTML = items.length ? [...items].reverse().map(e => `<div class="timeline-item"><span></span><div>${escapeHTML(e.message)}<br><small class="muted">${escapeHTML(e.action)}</small></div><time>${ago(e.createdAt)}</time></div>`).join('') : '<div class="empty-state">暂无操作记录</div>'; }
+function renderLists() {
+  $('#servers-list').innerHTML = state.servers.length ? state.servers.map(serverCard).join('') : '<div class="empty-state">尚未添加服务器</div>';
+  $('#setup-server').innerHTML = state.servers.length ? state.servers.map(s => `<option value="${escapeHTML(s.id)}">${escapeHTML(s.name)} · ${escapeHTML(s.host)}</option>`).join('') : '<option value="">请先添加服务器</option>';
+  $('#apps-list').innerHTML = state.apps.length ? state.apps.map(appCard).join('') : '<div class="empty-state">尚未创建应用</div>';
+  $('#databases-list').innerHTML = state.databases.length ? state.databases.map(dbCard).join('') : '<div class="empty-state">尚未创建数据库</div>';
+  renderAudit(state.audit, '#audit-list');
+}
+
+function environmentRows(components) { return components.map(item => `<div class="component-row"><div><strong>${escapeHTML(item.name)}</strong><small>${escapeHTML(item.category)} · ${escapeHTML(item.description)}</small></div><span class="component-status ${item.installed ? 'installed' : 'missing'}">${item.installed ? `✓ 已安装${item.version ? ` · ${escapeHTML(item.version)}` : ''}` : '待安装'}</span></div>`).join(''); }
+async function openEnvironment(serverId) {
+  if (!serverId) { toast('请先添加并选择服务器'); return; }
+  $('#modal-form').dataset.kind = ''; $('#modal-eyebrow').textContent = 'STEP 1 · ENVIRONMENT'; $('#modal-title').textContent = '正在检测服务器环境'; $('#modal-fields').innerHTML = '<div class="setup-loading full"><span class="spinner"></span>正在通过 SSH 检查已安装组件…</div>'; $('#modal-error').textContent = ''; $('.modal-actions').classList.add('hidden'); $('#modal').showModal();
+  try {
+    const result = await api(`/api/servers/${encodeURIComponent(serverId)}/environment`);
+    $('#modal-title').textContent = '网站运行环境';
+    $('#modal-fields').innerHTML = `<div class="environment-summary full"><strong>已安装 ${result.installed}/${result.total}</strong><span>${result.ready ? '环境已经就绪，可按需强制重装' : '检测到缺失组件，可一键补齐'}</span></div><div class="component-list full">${environmentRows(result.components)}</div><div class="install-actions full"><button type="button" class="primary" data-env-install="${escapeHTML(serverId)}" data-mode="skip">${result.ready ? '检查并跳过已安装项' : '一键安装缺失组件'}</button><button type="button" class="secondary" data-env-install="${escapeHTML(serverId)}" data-mode="force">强制重新安装全部</button></div><p class="muted full">默认模式会自动跳过已安装的 K3s，并让系统包管理器保留已安装版本；强制模式会重新安装系统软件包和 K3s。不会自动修改现有防火墙规则或删除网站数据。</p>`;
+  } catch (error) { $('#modal-error').textContent = error.message; $('#modal-fields').innerHTML = ''; }
+}
+async function startEnvironmentInstall(serverId, mode) {
+  if (mode === 'force' && !window.confirm('强制模式会重新安装已有组件。网站和数据库数据不会删除，但安装期间构建任务可能短暂受影响。确定继续吗？')) return;
+  const job = await api(`/api/servers/${encodeURIComponent(serverId)}/environment-install`, { method: 'POST', body: JSON.stringify({ mode }) });
+  $('#modal-title').textContent = '正在初始化服务器';
+  const renderJob = current => { $('#modal-fields').innerHTML = `<div class="progress-wrap full"><div class="progress-meta"><strong>${escapeHTML(current.current || '准备中')}</strong><span>${current.progress}%</span></div><div class="progress-track"><i style="width:${current.progress}%"></i></div><small>完成 ${current.completed}/${current.total} 项</small></div><pre class="log-view">${escapeHTML((current.log || []).join('\n'))}</pre>`; $('#modal-error').textContent = current.error || ''; };
+  renderJob(job);
+  const poll = async () => { try { const current = await api(`/api/setup-jobs/${encodeURIComponent(job.id)}`); renderJob(current); if (current.status === 'running') return setTimeout(poll, 1200); if (current.status === 'completed') { toast('服务器环境初始化完成'); await refresh(); } else toast('环境初始化未完成，请查看错误'); } catch (error) { $('#modal-error').textContent = error.message; } };
+  setTimeout(poll, 700);
+}
+async function refresh() {
+  const [dashboard, servers, apps, databases] = await Promise.all([api('/api/dashboard'), api('/api/servers'), api('/api/apps'), api('/api/databases')]);
+  Object.assign(state, { servers, apps, databases, audit: dashboard.audit }); renderDashboard(dashboard); renderLists(); navigate(location.hash.slice(1) || 'dashboard');
+}
+
+const definitions = {
+  server: { eyebrow: 'CONNECT', title: '添加服务器', endpoint: '/api/servers', fields: [
+    ['name','名称','text','生产服务器'], ['host','IP 或主机名','text','192.0.2.10'], ['port','SSH 端口','number','22'], ['user','SSH 用户','text','root'], ['privateKey','SSH 私钥','textarea','粘贴完整 OpenSSH 私钥','full'], ['description','备注','text','可选','full'] ] },
+  app: { eyebrow: 'DEPLOY', title: '创建应用', endpoint: '/api/apps', fields: [
+    ['name','应用名称','text','my-app'], ['serverId','目标服务器','server'], ['sourceType','源码类型','select','git|Git 仓库,upload|本地上传'], ['repository','Git 地址','text','https://github.com/...','full','git-only'], ['archive','源码压缩包','file','.zip,.tar.gz,.tgz','full','upload-only'], ['branch','分支','text','main','','git-only'], ['buildType','构建方式','select','auto|自动识别,dockerfile|Dockerfile,static|静态网站'], ['port','应用端口','number','8080'], ['autoDeploy','自动部署','checkbox','checked','',''], ['domain','绑定域名','text','app.example.com'], ['envText','环境变量','textarea','每行一个，例如：\nDATABASE_URL=...\nAPI_KEY=...','full'] ] },
+  database: { eyebrow: 'DATA', title: '创建数据库', endpoint: '/api/databases', fields: [
+    ['name','数据库名称','text','main-db'], ['serverId','目标服务器','server'], ['engine','数据库','select','postgresql|PostgreSQL,mysql|MySQL,redis|Redis'], ['version','版本','text','16'], ['storageGB','存储空间 GB','number','10'] ] }
+};
+function fieldHTML(field) {
+  const [name,label,type,value,klass='',mode=''] = field; let control;
+  if (type === 'server') control = `<select name="${name}" required><option value="">请选择</option>${state.servers.map(s => `<option value="${escapeHTML(s.id)}">${escapeHTML(s.name)}</option>`).join('')}</select>`;
+  else if (type === 'select') control = `<select name="${name}">${value.split(',').map(v => { const [key,text]=v.split('|'); return `<option value="${key}">${text}</option>`; }).join('')}</select>`;
+  else if (type === 'file') control = `<input name="${name}" type="file" accept=".zip,.tar.gz,.tgz">`;
+  else if (type === 'checkbox') control = `<input name="${name}" type="checkbox" ${value === 'checked' ? 'checked' : ''}>`;
+  else if (type === 'textarea') control = `<textarea name="${name}" placeholder="${escapeHTML(value)}" ${name === 'privateKey' ? 'required' : ''}></textarea>`;
+  else control = `<input name="${name}" type="${type}" placeholder="${escapeHTML(value)}" ${['name','host'].includes(name) ? 'required' : ''}>`;
+  return `<label class="${klass} ${mode}" data-mode="${mode}">${label}${control}</label>`;
+}
+function updateSourceFields() { const type = $('#modal-form [name="sourceType"]')?.value || 'git'; document.querySelectorAll('[data-mode="git-only"]').forEach(el => el.classList.toggle('hidden', type !== 'git')); document.querySelectorAll('[data-mode="upload-only"]').forEach(el => el.classList.toggle('hidden', type !== 'upload')); const archive = $('#modal-form [name="archive"]'); if (archive) archive.required = type === 'upload'; }
+function openModal(kind) { const d = definitions[kind]; $('#modal-form').dataset.kind = kind; $('#modal-eyebrow').textContent = d.eyebrow; $('#modal-title').textContent = d.title; $('#modal-fields').innerHTML = d.fields.map(fieldHTML).join(''); $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); updateSourceFields(); }
+function openAppConfig(app) { const envText = (app.variables || []).map(v => `${v.key}=••••••••`).join('\n'); $('#modal-form').dataset.kind = `appconfig:${app.id}`; $('#modal-eyebrow').textContent = 'CONFIGURATION'; $('#modal-title').textContent = `${app.name} 配置`; $('#modal-fields').innerHTML = `<label>源码类型<select name="sourceType"><option value="git" ${app.sourceType === 'git' ? 'selected' : ''}>Git 仓库</option><option value="upload" ${app.sourceType === 'upload' ? 'selected' : ''}>本地上传</option><option value="image" ${app.sourceType === 'image' ? 'selected' : ''}>现有镜像</option></select></label><label>构建方式<select name="buildType"><option value="auto" ${app.buildType === 'auto' ? 'selected' : ''}>自动识别</option><option value="dockerfile" ${app.buildType === 'dockerfile' ? 'selected' : ''}>Dockerfile</option><option value="static" ${app.buildType === 'static' ? 'selected' : ''}>静态网站</option><option value="image" ${app.buildType === 'image' ? 'selected' : ''}>现有镜像</option></select></label><label class="full">Git 仓库地址<input name="repository" value="${escapeHTML(app.repository || '')}" placeholder="https://github.com/owner/repo.git"></label><label>Git 分支<input name="branch" value="${escapeHTML(app.branch || 'main')}"></label><label>应用端口<input name="port" type="number" min="1" max="65535" value="${app.port || 8080}" required></label><label class="full check-label"><input name="autoDeploy" type="checkbox" ${app.autoDeploy ? 'checked' : ''}> 开启自动部署</label><label class="full">连接数据库<select name="databaseId"><option value="">不连接数据库</option>${state.databases.filter(d => d.serverId === app.serverId && d.status === 'running').map(d => `<option value="${escapeHTML(d.id)}" ${d.id === app.databaseId ? 'selected' : ''}>${escapeHTML(d.name)} · ${escapeHTML(d.engine)}</option>`).join('')}</select></label><label class="full env-label"><span>环境变量 <button type="button" class="eye-button" data-reveal-vars="${escapeHTML(app.id)}" title="查看隐藏环境变量">◉ 查看</button></span><textarea name="envText" placeholder="每行一个 KEY=VALUE">${escapeHTML(envText)}</textarea></label><p class="muted full">Git 应用检测新提交并自动构建；本地源码和镜像应用会自动首次部署并在工作负载缺失时恢复。域名请用“编辑域名”管理。</p>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); }
+function openServerEdit(server) { $('#modal-form').dataset.kind = `serveredit:${server.id}`; $('#modal-eyebrow').textContent = 'EDIT SERVER'; $('#modal-title').textContent = `${server.name} · 编辑`; $('#modal-fields').innerHTML = `<label>名称<input name="name" value="${escapeHTML(server.name)}" required></label><label>IP 或主机名<input name="host" value="${escapeHTML(server.host)}" required></label><label>SSH 端口<input name="port" type="number" min="1" max="65535" value="${server.port || 22}" required></label><label>SSH 用户<input name="user" value="${escapeHTML(server.user || 'root')}" required></label><label class="full">替换 SSH 私钥（留空则保持原密钥）<textarea name="privateKey" placeholder="仅在需要更换密钥时填写"></textarea></label><label class="full">备注<input name="description" value="${escapeHTML(server.description || '')}"></label>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); }
+function openDatabaseEdit(database) { $('#modal-form').dataset.kind = `databaseedit:${database.id}`; $('#modal-eyebrow').textContent = 'EDIT DATABASE'; $('#modal-title').textContent = `${database.name} · 编辑`; $('#modal-fields').innerHTML = `<label>数据库名称<input name="name" value="${escapeHTML(database.name)}" required></label><label>目标服务器<select name="serverId" required>${state.servers.map(s => `<option value="${escapeHTML(s.id)}" ${s.id === database.serverId ? 'selected' : ''}>${escapeHTML(s.name)}</option>`).join('')}</select></label><label>数据库<select name="engine"><option value="postgresql" ${database.engine === 'postgresql' ? 'selected' : ''}>PostgreSQL</option><option value="mysql" ${database.engine === 'mysql' ? 'selected' : ''}>MySQL</option><option value="redis" ${database.engine === 'redis' ? 'selected' : ''}>Redis</option></select></label><label>版本<input name="version" value="${escapeHTML(database.version)}" required></label><label>存储空间 GB<input name="storageGB" type="number" min="1" value="${database.storageGB || 10}" required></label>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); }
+function openAdoptedDomains(app) { const values = (app.domains || []).map(d => d.host).join('\n'); $('#modal-form').dataset.kind = `adopteddomains:${app.id}`; $('#modal-eyebrow').textContent = 'DOMAIN ROUTES'; $('#modal-title').textContent = `${app.name} · 编辑域名`; $('#modal-fields').innerHTML = `<label class="full">绑定域名（每行一个）<textarea name="domainsText" placeholder="app.example.com\nwww.example.com">${escapeHTML(values)}</textarea></label><p class="muted full">保存后会立即更新 Caddy 路由和 HTTPS。删除某一行即可解绑该域名；留空将解绑全部域名，但应用仍保持运行。</p>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('#modal').showModal(); }
+$('#modal-close').onclick = $('#modal-cancel').onclick = () => $('#modal').close();
+$('#page-action').addEventListener('click', async () => { if (state.page === 'activity') return refresh(); openModal(state.page === 'apps' ? 'app' : state.page === 'databases' ? 'database' : 'server'); });
+$('#modal-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); const kind = event.currentTarget.dataset.kind, formData = new FormData(event.currentTarget), values = Object.fromEntries(formData);
+  if (kind === 'password') { if (values.newPassword !== values.confirmPassword) { $('#modal-error').textContent = '两次输入的新密码不一致'; return; } delete values.confirmPassword; try { await api('/api/account/password', { method: 'POST', body: JSON.stringify(values) }); $('#modal').close(); toast('密码已修改，其他登录会话已退出'); } catch (error) { $('#modal-error').textContent = error.message; } return; }
+  if (kind.startsWith('serveredit:')) { const id = kind.split(':')[1]; values.port = Number(values.port); try { await api(`/api/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(values) }); $('#modal').close(); toast('服务器信息已更新，请重新检测连接'); await refresh(); } catch (error) { $('#modal-error').textContent = error.message; } return; }
+  if (kind.startsWith('databaseedit:')) { const id = kind.split(':')[1]; values.storageGB = Number(values.storageGB); try { await api(`/api/databases/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(values) }); $('#modal').close(); toast('数据库配置已更新'); await refresh(); } catch (error) { $('#modal-error').textContent = error.message; } return; }
+  if (kind.startsWith('adopteddomains:')) { const id = kind.split(':')[1]; const domains = String(values.domainsText || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean); try { await api(`/api/apps/${encodeURIComponent(id)}/adopted-domains`, { method: 'PUT', body: JSON.stringify({ domains }) }); $('#modal').close(); toast('域名路由已更新'); await refresh(); } catch (error) { $('#modal-error').textContent = error.message; } return; }
+  if (kind.startsWith('appconfig:')) { const id = kind.split(':')[1]; values.port = Number(values.port); values.autoDeploy = formData.has('autoDeploy'); values.preserveDomains = true; values.variables = String(values.envText || '').split('\n').filter(Boolean).map(line => { const i=line.indexOf('='); return i > 0 ? { key: line.slice(0,i).trim(), value: line.slice(i+1).trim(), secret: true } : null; }).filter(Boolean); delete values.envText; try { await api(`/api/apps/${encodeURIComponent(id)}/config`, { method: 'PUT', body: JSON.stringify(values) }); $('#modal').close(); toast('应用配置已保存'); await refresh(); } catch (error) { $('#modal-error').textContent = error.message; } return; }
+  const d = definitions[kind];
+  ['port','storageGB'].forEach(k => { if (values[k]) values[k] = Number(values[k]); });
+  try { if (kind === 'app' && values.sourceType === 'upload') await api('/api/apps/upload', { method: 'POST', body: formData }); else { delete values.archive; if (kind === 'app') { values.autoDeploy = formData.has('autoDeploy'); values.variables = String(values.envText || '').split('\n').filter(Boolean).map(line => { const i=line.indexOf('='); return i > 0 ? { key: line.slice(0,i).trim(), value: line.slice(i+1).trim(), secret: true } : null; }).filter(Boolean); values.domains = values.domain ? [{ host: values.domain.trim(), https: true, status: 'pending', targetPort: values.port || 8080 }] : []; delete values.envText; delete values.domain; } await api(d.endpoint, { method: 'POST', body: JSON.stringify(values) }); } $('#modal').close(); toast(`${d.title}成功`); await refresh(); }
+  catch (error) { $('#modal-error').textContent = error.message; }
+});
+$('#modal-fields').addEventListener('change', event => { if (event.target.name === 'sourceType') updateSourceFields(); });
+$('#inspect-environment').addEventListener('click', () => openEnvironment($('#setup-server').value));
+
+document.addEventListener('click', async (event) => {
+  const inspectButton = event.target.closest('[data-env-inspect]');
+  if (inspectButton) { await openEnvironment(inspectButton.dataset.envInspect); return; }
+  const installButton = event.target.closest('[data-env-install]');
+  if (installButton) { installButton.disabled = true; try { await startEnvironmentInstall(installButton.dataset.envInstall, installButton.dataset.mode); } catch (error) { $('#modal-error').textContent = error.message; installButton.disabled = false; } return; }
+  const revealButton = event.target.closest('[data-reveal-vars]');
+  if (revealButton) { const textarea = $('#modal-form [name="envText"]'); if (!textarea) return; revealButton.disabled = true; try { const variables = await api(`/api/apps/${encodeURIComponent(revealButton.dataset.revealVars)}/variables`); textarea.value = variables.map(v => `${v.key}=${v.value || ''}`).join('\n'); revealButton.textContent = '✓ 已显示'; } catch (error) { toast(error.message); } finally { revealButton.disabled = false; } return; }
+  const deleteButton = event.target.closest('[data-delete-type]');
+  if (deleteButton) { const type = deleteButton.dataset.deleteType, id = deleteButton.dataset.id; const collection = type === 'server' ? state.servers : type === 'app' ? state.apps : state.databases; const item = collection.find(entry => entry.id === id); if (!item) return; const adopted = item.managedMode === 'adopted'; const confirmName = window.prompt(`${adopted ? '只会移除面板记录，K3s 服务和数据保持不变。' : '此操作不可撤销。'}请输入名称“${item.name}”确认：`); if (confirmName === null) return; if (confirmName !== item.name) { toast('名称不匹配，未执行操作'); return; } if (type === 'database' && !adopted && !window.confirm('数据库及其持久卷中的数据会被永久删除。确定继续吗？')) return; deleteButton.disabled = true; try { await api(`/api/${type === 'app' ? 'apps' : type === 'server' ? 'servers' : 'databases'}/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirmName, deleteData: type === 'database' }) }); toast(adopted ? '已移出面板，服务和数据未删除' : type === 'database' ? '数据库及数据已永久删除' : '已删除'); await refresh(); } catch (error) { toast(error.message); } finally { deleteButton.disabled = false; } return; }
+  const serverEdit = event.target.closest('[data-server-edit]');
+  if (serverEdit) { const server = state.servers.find(item => item.id === serverEdit.dataset.serverEdit); if (server) openServerEdit(server); return; }
+  const databaseEdit = event.target.closest('[data-db-edit]');
+  if (databaseEdit) { const database = state.databases.find(item => item.id === databaseEdit.dataset.dbEdit); if (database) openDatabaseEdit(database); return; }
+  const adoptedDomains = event.target.closest('[data-adopted-domains]');
+  if (adoptedDomains) { const app = state.apps.find(item => item.id === adoptedDomains.dataset.adoptedDomains); if (app) openAdoptedDomains(app); return; }
+  const promoteButton = event.target.closest('[data-app-promote]');
+  if (promoteButton) { const id = promoteButton.dataset.appPromote; promoteButton.disabled = true; promoteButton.textContent = '归档中…'; try { const result = await api(`/api/apps/${encodeURIComponent(id)}/promote`, { method: 'POST' }); toast(`已创建原生应用 ${result.name}，请点击开始部署`); await refresh(); } catch (error) { toast(error.message); } finally { promoteButton.disabled = false; } return; }
+  const dbButton = event.target.closest('[data-db-action]');
+  if (dbButton) { const id = dbButton.dataset.id, original = dbButton.textContent; dbButton.disabled = true; dbButton.textContent = '部署中…'; try { const result = await api(`/api/databases/${encodeURIComponent(id)}/provision`, { method: 'POST' }); $('#modal-form').dataset.kind = ''; $('#modal-eyebrow').textContent = 'DATABASE READY'; $('#modal-title').textContent = '数据库连接信息'; $('#modal-fields').innerHTML = `<pre class="log-view">主机：${escapeHTML(result.host)}\n端口：${escapeHTML(result.port)}\n用户名：${escapeHTML(result.username)}\n密码：${escapeHTML(result.password)}\n数据库：${escapeHTML(result.database)}\n\n连接地址：\n${escapeHTML(result.url)}</pre>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.add('hidden'); $('#modal').showModal(); await refresh(); } catch (error) { toast(error.message); await refresh(); } finally { dbButton.disabled = false; dbButton.textContent = original; } return; }
+  const logButton = event.target.closest('[data-app-log]');
+  if (logButton) { const app = state.apps.find(item => item.id === logButton.dataset.appLog); if (!app) return; $('#modal-form').dataset.kind = ''; $('#modal-eyebrow').textContent = 'DEPLOY LOG'; $('#modal-title').textContent = `${app.name} 部署日志`; $('#modal-fields').innerHTML = `<pre class="log-view">${escapeHTML(app.deployLog || '暂无日志')}</pre>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.add('hidden'); $('#modal').showModal(); return; }
+  const configButton = event.target.closest('[data-app-config]');
+  if (configButton) { const app = state.apps.find(item => item.id === configButton.dataset.appConfig); if (app) openAppConfig(app); return; }
+  const appButton = event.target.closest('[data-app-action]');
+  if (appButton) { const id = appButton.dataset.id, original = appButton.textContent; appButton.disabled = true; appButton.textContent = '部署中…'; try { await api(`/api/apps/${encodeURIComponent(id)}/deploy`, { method: 'POST' }); toast('应用部署成功'); await refresh(); } catch (error) { toast(error.message); await refresh(); } finally { appButton.disabled = false; appButton.textContent = original; } return; }
+  const button = event.target.closest('[data-server-action]'); if (!button) return;
+  const action = button.dataset.serverAction, id = button.dataset.id;
+  const original = button.textContent; button.disabled = true; button.textContent = action === 'test' ? '检测中…' : action === 'adopt' ? '扫描接管中…' : '执行中…';
+  try { const result = await api(`/api/servers/${encodeURIComponent(id)}/${action}`, { method: 'POST' }); toast(action === 'test' ? '服务器连接正常' : action === 'adopt' ? `已接管 ${result.appsAdded} 个应用和 ${result.databasesAdded} 个数据库` : 'K3s 已准备完成'); await refresh(); }
+  catch (error) { toast(error.message); }
+  finally { button.disabled = false; button.textContent = original; }
+});
+
+refresh().then(showApp).catch(() => showLogin());

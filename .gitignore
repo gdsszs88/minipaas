@@ -1,0 +1,10 @@
+/minipaas
+/minipaas.exe
+/minipaas-linux-*
+/state-env-linux-*
+/.preview-data/
+/.preview-cookie.txt
+/data/
+/.env
+*.log
+

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MiniPaaS 控制台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login-shell">
+    <section class="login-card">
+      <div class="brand-mark">M</div>
+      <p class="eyebrow">SELF-HOSTED CONTROL PLANE</p>
+      <h1>MiniPaaS</h1>
+      <p class="muted">你的服务器、应用与数据，全部由自己掌控。</p>
+      <form id="login-form">
+        <label>管理员密码<input id="password" type="password" autocomplete="current-password" required autofocus></label>
+        <button type="submit" class="primary">进入控制台</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+    </section>
+  </div>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand" href="#dashboard"><span class="brand-mark small">M</span><span>MiniPaaS</span></a>
+      <nav id="nav">
+        <a href="#dashboard" data-page="dashboard" class="active"><span>◫</span>概览</a>
+        <a href="#servers" data-page="servers"><span>▤</span>服务器</a>
+        <a href="#apps" data-page="apps"><span>◆</span>应用</a>
+        <a href="#databases" data-page="databases"><span>◉</span>数据库</a>
+        <a href="#activity" data-page="activity"><span>↻</span>操作记录</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="status-dot"></span><span>控制平面正常</span>
+        <button id="change-password" class="text-button">修改密码</button>
+        <button id="logout" class="text-button">退出</button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PRIVATE CLOUD</p>
+          <h2 id="page-title">基础设施概览</h2>
+        </div>
+        <button id="page-action" class="primary">添加服务器</button>
+      </header>
+
+      <section id="dashboard-page" class="page active">
+        <div id="metrics" class="metric-grid"></div>
+        <div class="two-column">
+          <article class="panel">
+            <div class="panel-head"><div><p class="eyebrow">SERVERS</p><h3>节点状态</h3></div><a href="#servers">查看全部</a></div>
+            <div id="server-summary" class="empty-state">暂无服务器，先添加一台 VPS。</div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><p class="eyebrow">ACTIVITY</p><h3>最近操作</h3></div><a href="#activity">完整记录</a></div>
+            <div id="audit-summary" class="timeline"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="servers-page" class="page">
+        <article class="panel setup-panel">
+          <div class="setup-step">第一步</div>
+          <div class="setup-copy"><p class="eyebrow">SERVER BOOTSTRAP</p><h3>一键安装网站运行环境</h3><p>自动检测并安装基础工具、容器构建、K3s、数据库客户端及安全依赖；已经安装的组件可以跳过或强制重装。</p></div>
+          <div class="setup-controls"><select id="setup-server"><option value="">请先添加服务器</option></select><button type="button" class="primary" id="inspect-environment">检测并安装</button></div>
+        </article>
+        <div class="section-intro"><div><h3>托管服务器</h3><p>连接、初始化并管理用于部署网站的服务器。</p></div></div>
+        <div id="servers-list" class="card-grid"></div>
+      </section>
+
+      <section id="apps-page" class="page">
+        <div class="section-intro"><div><h3>应用</h3><p>从 Git 仓库或本地源码构建并部署。</p></div></div>
+        <div id="apps-list" class="card-grid"></div>
+      </section>
+
+      <section id="databases-page" class="page">
+        <div class="section-intro"><div><h3>数据库</h3><p>创建带持久卷和自动备份的数据库服务。</p></div></div>
+        <div id="databases-list" class="card-grid"></div>
+      </section>
+
+      <section id="activity-page" class="page">
+        <article class="panel"><div class="panel-head"><div><p class="eyebrow">AUDIT LOG</p><h3>操作记录</h3></div></div><div id="audit-list" class="timeline"></div></article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="modal">
+    <form id="modal-form" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow" id="modal-eyebrow">CREATE</p><h3 id="modal-title">添加服务器</h3></div><button type="button" id="modal-close" class="icon-button" aria-label="关闭">×</button></div>
+      <div id="modal-fields" class="form-grid"></div>
+      <p id="modal-error" class="error" role="alert"></p>
+      <div class="modal-actions"><button type="button" id="modal-cancel" class="secondary">取消</button><button type="submit" class="primary">保存</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
