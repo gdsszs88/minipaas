@@ -411,6 +411,7 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Server
 			PrivateKey string `json:"privateKey"`
+			Password   string `json:"password"`
 		}
 		if err := decodeJSON(r, &request); err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
@@ -434,16 +435,27 @@ func (a *API) servers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
-		if strings.TrimSpace(request.PrivateKey) == "" {
-			writeJSON(w, 400, map[string]string{"error": "必须提供 SSH 私钥"})
+		if input.AuthType == "" {
+			input.AuthType = "privateKey"
+		}
+		if input.AuthType != "privateKey" && input.AuthType != "password" {
+			writeJSON(w, 400, map[string]string{"error": "SSH 登录方式不正确"})
 			return
 		}
-		ciphertext, err := a.secrets.Encrypt([]byte(request.PrivateKey))
+		credential := request.PrivateKey
+		if input.AuthType == "password" {
+			credential = request.Password
+		}
+		if credential == "" {
+			writeJSON(w, 400, map[string]string{"error": map[bool]string{true: "必须提供 SSH 密码", false: "必须提供 SSH 私钥"}[input.AuthType == "password"]})
+			return
+		}
+		ciphertext, err := a.secrets.Encrypt([]byte(credential))
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "无法加密私钥"})
 			return
 		}
-		input.AuthType, input.Credential = "privateKey", ciphertext
+		input.Credential = ciphertext
 		input.ID, input.Status, input.CreatedAt = newID("srv"), "pending", time.Now()
 		err = a.store.mutate(func(s *State) error {
 			s.Servers = append(s.Servers, input)

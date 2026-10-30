@@ -20,8 +20,8 @@ type deleteRequest struct {
 func (a *API) serverUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var input struct {
-		Name, Host, User, Description, PrivateKey string
-		Port                                      int
+		Name, Host, User, Description, AuthType, PrivateKey, Password string
+		Port                                                          int
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
@@ -42,9 +42,20 @@ func (a *API) serverUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	if input.AuthType == "" {
+		input.AuthType = "privateKey"
+	}
+	if input.AuthType != "privateKey" && input.AuthType != "password" {
+		writeJSON(w, 400, map[string]string{"error": "SSH 登录方式不正确"})
+		return
+	}
 	newCredential := ""
-	if strings.TrimSpace(input.PrivateKey) != "" {
-		encrypted, err := a.secrets.Encrypt([]byte(input.PrivateKey))
+	plainCredential := input.PrivateKey
+	if input.AuthType == "password" {
+		plainCredential = input.Password
+	}
+	if plainCredential != "" {
+		encrypted, err := a.secrets.Encrypt([]byte(plainCredential))
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "无法加密私钥"})
 			return
@@ -58,8 +69,12 @@ func (a *API) serverUpdate(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			found = true
-			connectionChanged := state.Servers[i].Host != input.Host || state.Servers[i].Port != input.Port || state.Servers[i].User != input.User || newCredential != ""
+			if state.Servers[i].AuthType != input.AuthType && newCredential == "" {
+				return errors.New("切换 SSH 登录方式时必须填写新的登录凭据")
+			}
+			connectionChanged := state.Servers[i].Host != input.Host || state.Servers[i].Port != input.Port || state.Servers[i].User != input.User || state.Servers[i].AuthType != input.AuthType || newCredential != ""
 			state.Servers[i].Name, state.Servers[i].Host, state.Servers[i].Port, state.Servers[i].User, state.Servers[i].Description = input.Name, input.Host, input.Port, input.User, input.Description
+			state.Servers[i].AuthType = input.AuthType
 			if newCredential != "" {
 				state.Servers[i].Credential = newCredential
 			}

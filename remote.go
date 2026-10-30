@@ -50,11 +50,20 @@ type RemoteInfo struct {
 }
 
 func (r *RemoteClient) dial(ctx context.Context) (*ssh.Client, error) {
-	signer, err := ssh.ParsePrivateKey(r.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("解析 SSH 私钥失败: %w", err)
+	var auth ssh.AuthMethod
+	if r.Server.AuthType == "password" {
+		if len(r.PrivateKey) == 0 {
+			return nil, errors.New("SSH 密码为空")
+		}
+		auth = ssh.Password(string(r.PrivateKey))
+	} else {
+		signer, err := ssh.ParsePrivateKey(r.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("解析 SSH 私钥失败: %w", err)
+		}
+		auth = ssh.PublicKeys(signer)
 	}
-	config := &ssh.ClientConfig{User: r.Server.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	config := &ssh.ClientConfig{User: r.Server.User, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint := ssh.FingerprintSHA256(key)
 		if r.Server.HostKeyFingerprint != "" && r.Server.HostKeyFingerprint != fingerprint {
 			return fmt.Errorf("SSH 主机密钥发生变化，期望 %s，实际 %s", r.Server.HostKeyFingerprint, fingerprint)
