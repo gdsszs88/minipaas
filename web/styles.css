@@ -57,6 +57,24 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
 .metric, .panel, .resource-card { border: 1px solid var(--line); background: linear-gradient(150deg, rgba(21,25,35,.96), rgba(14,17,24,.96)); }
 .metric { padding: 20px; border-radius: 14px; }
+.monitoring-panel { margin-bottom: 18px; }
+.monitor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.monitor-card { padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: #0c0f15; }
+.monitor-card h4 { margin: 0 0 4px; }
+.monitor-card p { margin: 0; color: var(--muted); font-size: 11px; }
+.monitor-card.offline { border-color: rgba(251,113,133,.35); }
+.monitor-meter { margin-top: 13px; }
+.monitor-meter > div, .pod-health { display: flex; justify-content: space-between; font-size: 12px; }
+.monitor-meter i { display: block; height: 6px; margin: 6px 0 4px; overflow: hidden; border-radius: 99px; background: #202633; }
+.monitor-meter i b { display: block; height: 100%; border-radius: inherit; background: var(--green); transition: width .4s; }
+.monitor-meter small { color: var(--muted); }
+.monitor-meter.warning i b { background: #fbbf24; }
+.monitor-meter.critical i b { background: var(--red); }
+.monitor-meter.warning strong { color: #fbbf24; }
+.monitor-meter.critical strong { color: var(--red); }
+.pod-health { margin-top: 13px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); }
+.pod-health strong { color: var(--green); }
+.pod-health.warning strong { color: #fbbf24; }
 .metric strong { display: block; margin-top: 12px; font-size: 30px; }
 .metric small { color: var(--muted); }
 .two-column { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }

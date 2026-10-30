@@ -879,6 +879,7 @@ func main() {
 	mux.Handle("POST /api/logout", api.auth(http.HandlerFunc(api.logout)))
 	mux.Handle("POST /api/account/password", api.auth(http.HandlerFunc(api.changePassword)))
 	mux.Handle("GET /api/dashboard", api.auth(http.HandlerFunc(api.dashboard)))
+	mux.Handle("GET /api/monitoring", api.auth(http.HandlerFunc(api.monitoring)))
 	mux.Handle("/api/servers", api.auth(http.HandlerFunc(api.servers)))
 	mux.Handle("POST /api/servers/{id}/{action}", api.auth(http.HandlerFunc(api.serverAction)))
 	mux.Handle("GET /api/servers/{id}/environment", api.auth(http.HandlerFunc(api.serverEnvironment)))
