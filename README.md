@@ -2,6 +2,8 @@
 
 MiniPaaS 是一个部署在自己 VPS 上的轻量可视化 PaaS 面板。它通过 SSH 管理服务器，支持 Git/本地源码部署、K3s、环境变量、域名 HTTPS、PostgreSQL/MySQL/Redis、自动部署、备份与现有工作负载接管。
 
+在面板添加其他 Ubuntu/Debian VPS 后，“初始化环境”会自动安装构建工具、K3s、数据库客户端、独立 Caddy HTTPS 网关并检查 80/443 端口。环境显示“完全就绪”后，即可把应用和数据库远程部署到该服务器。
+
 ## 一条命令安装
 
 准备一台全新的 Ubuntu 22.04/24.04 或 Debian 12 x86_64 VPS，并提前把域名的 A 记录解析到服务器公网 IP，然后以 root 执行：

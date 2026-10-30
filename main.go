@@ -42,6 +42,8 @@ type Server struct {
 	AuthType           string    `json:"authType,omitempty"`
 	Credential         string    `json:"credential,omitempty"`
 	HostKeyFingerprint string    `json:"hostKeyFingerprint,omitempty"`
+	EnvironmentReady   bool      `json:"environmentReady,omitempty"`
+	EnvironmentChecked time.Time `json:"environmentCheckedAt,omitempty"`
 }
 
 type Variable struct {

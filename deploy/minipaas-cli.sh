@@ -24,8 +24,9 @@ ensure_k3s(){
 ensure_caddy(){
   if k3s kubectl -n default get configmap "$CADDY_CM" >/dev/null 2>&1 && k3s kubectl -n default get daemonset "$CADDY_DS" >/dev/null 2>&1; then say "独立 Caddy 已安装，跳过"; return; fi
   say "安装独立 Caddy HTTPS 网关…"
-  install -d -m 700 /var/lib/independent-caddy
-  cat >/tmp/minipaas-caddy.yaml <<'YAML'
+  install -d -m 700 /var/lib/independent-caddy/data /var/lib/independent-caddy/config
+  if ! k3s kubectl -n default get configmap "$CADDY_CM" >/dev/null 2>&1; then
+  cat >/tmp/minipaas-caddy-config.yaml <<'YAML'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -34,9 +35,12 @@ metadata:
 data:
   Caddyfile: |
     {
-      admin off
+      auto_https disable_redirects
     }
----
+YAML
+  k3s kubectl apply -f /tmp/minipaas-caddy-config.yaml
+  fi
+  cat >/tmp/minipaas-caddy-daemonset.yaml <<'YAML'
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -56,27 +60,31 @@ spec:
       containers:
       - name: caddy
         image: caddy:2-alpine
-        args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            add: ["NET_BIND_SERVICE"]
+        args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
         volumeMounts:
         - name: config
           mountPath: /etc/caddy
+          readOnly: true
         - name: data
           mountPath: /data
+        - name: runtime-config
+          mountPath: /config
       volumes:
       - name: config
         configMap:
           name: independent-caddy-config
       - name: data
         hostPath:
-          path: /var/lib/independent-caddy
+          path: /var/lib/independent-caddy/data
+          type: DirectoryOrCreate
+      - name: runtime-config
+        hostPath:
+          path: /var/lib/independent-caddy/config
           type: DirectoryOrCreate
 YAML
-  k3s kubectl apply -f /tmp/minipaas-caddy.yaml
+  k3s kubectl apply -f /tmp/minipaas-caddy-daemonset.yaml
   k3s kubectl -n default rollout status daemonset "$CADDY_DS" --timeout=180s
+  if ufw status 2>/dev/null | grep -q '^Status: active'; then ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 443/udp; fi
 }
 
 write_domain(){

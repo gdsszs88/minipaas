@@ -110,6 +110,7 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .resource-card { padding: 18px; border-radius: 14px; }
 .resource-card h4 { margin: 0 0 6px; font-size: 16px; }
 .resource-card p { margin: 5px 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.ready-text { color: var(--green); font-weight: 700; }
 .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .card-actions button { padding: 7px 10px; color: #dce3ee; background: #171c27; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 .card-actions button:hover { border-color: var(--accent); }
