@@ -160,8 +160,8 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/minipaas
-ProtectHome=true
+ReadWritePaths=/var/lib/minipaas /root/independent-backups
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target

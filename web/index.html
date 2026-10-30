@@ -30,6 +30,7 @@
         <a href="#servers" data-page="servers"><span>▤</span>服务器</a>
         <a href="#apps" data-page="apps"><span>◆</span>应用</a>
         <a href="#databases" data-page="databases"><span>◉</span>数据库</a>
+        <a href="#recovery" data-page="recovery"><span>⟳</span>灾难恢复</a>
         <a href="#activity" data-page="activity"><span>↻</span>操作记录</a>
       </nav>
       <div class="sidebar-foot">
@@ -85,6 +86,13 @@
       <section id="databases-page" class="page">
         <div class="section-intro"><div><h3>数据库</h3><p>创建带持久卷和自动备份的数据库服务。</p></div></div>
         <div id="databases-list" class="card-grid"></div>
+      </section>
+
+      <section id="recovery-page" class="page">
+        <div class="section-intro"><div><h3>灾难恢复向导</h3><p>从每日完整备份恢复服务器环境、网站、环境变量、数据库、域名和面板设置。</p></div></div>
+        <div class="recovery-warning"><strong>安全恢复机制</strong><span>恢复前自动校验 SHA256，并再创建一份当前状态安全备份；只有输入指定确认文字后才会执行。</span></div>
+        <div class="recovery-upload"><div><strong>从电脑导入备份包</strong><small>支持 .zip、.tar.gz、.tgz，上传完成后自动解压并校验</small></div><input id="recovery-archive" type="file" accept=".zip,.gz,.tgz,application/zip,application/gzip"><button id="recovery-upload" class="primary">上传并校验</button></div>
+        <div id="recovery-packages" class="recovery-list"><div class="setup-loading"><span class="spinner"></span>正在读取服务器备份…</div></div>
       </section>
 
       <section id="activity-page" class="page">

@@ -71,10 +71,12 @@ if [ "${#managed_images[@]}" -gt 0 ]; then
   k3s ctr -n k8s.io images export "$target/images/minipaas-managed-images.tar" "${managed_images[@]}"
 fi
 
-find "$target" -type f ! -name SHA256SUMS -print0 \
-  | sort -z \
-  | xargs -0 sha256sum \
-  > "$target/SHA256SUMS"
+(
+  cd "$target"
+  find . -type f ! -name SHA256SUMS -print0 \
+    | sort -z \
+    | xargs -0 sha256sum
+) > "$target/SHA256SUMS"
 
 chmod -R go-rwx "$target"
 ln -sfn "$target" "$backup_root/latest"

@@ -234,6 +234,8 @@ type API struct {
 	dataDir       string
 	setupJobs     map[string]*SetupJob
 	setupMu       sync.RWMutex
+	recoveryJobs  map[string]*RecoveryJob
+	recoveryMu    sync.RWMutex
 }
 
 func (a *API) passwordMatches(value string) bool {
@@ -1073,7 +1075,7 @@ func main() {
 			copy(passwordHash[:], decoded)
 		}
 	}
-	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}}
+	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}, recoveryJobs: map[string]*RecoveryJob{}}
 	api.loadSessions()
 
 	mux := http.NewServeMux()
@@ -1085,6 +1087,11 @@ func main() {
 	mux.Handle("GET /api/dashboard", api.auth(http.HandlerFunc(api.dashboard)))
 	mux.Handle("GET /api/audit", api.auth(http.HandlerFunc(api.auditLog)))
 	mux.Handle("DELETE /api/audit", api.auth(http.HandlerFunc(api.auditLog)))
+	mux.Handle("GET /api/recovery/packages", api.auth(http.HandlerFunc(api.recoveryPackages)))
+	mux.Handle("POST /api/recovery/upload", api.auth(http.HandlerFunc(api.recoveryUpload)))
+	mux.Handle("POST /api/recovery/packages/{id}/verify", api.auth(http.HandlerFunc(api.recoveryVerify)))
+	mux.Handle("POST /api/recovery/jobs", api.auth(http.HandlerFunc(api.recoveryStart)))
+	mux.Handle("GET /api/recovery/jobs/{id}", api.auth(http.HandlerFunc(api.recoveryStatus)))
 	mux.Handle("GET /api/monitoring", api.auth(http.HandlerFunc(api.monitoring)))
 	mux.Handle("/api/servers", api.auth(http.HandlerFunc(api.servers)))
 	mux.Handle("POST /api/servers/{id}/{action}", api.auth(http.HandlerFunc(api.serverAction)))
