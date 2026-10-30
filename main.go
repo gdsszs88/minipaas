@@ -894,6 +894,7 @@ func main() {
 	mux.Handle("GET /api/apps/{id}/history", api.auth(http.HandlerFunc(api.appHistory)))
 	mux.Handle("POST /api/apps/{id}/rollback", api.auth(http.HandlerFunc(api.appRollback)))
 	mux.Handle("GET /api/apps/{id}/runtime-logs", api.auth(http.HandlerFunc(api.appRuntimeLogs)))
+	mux.Handle("GET /api/apps/{id}/domain-health", api.auth(http.HandlerFunc(api.appDomainHealth)))
 	mux.Handle("GET /api/apps/{id}/variables", api.auth(http.HandlerFunc(api.appVariables)))
 	mux.Handle("POST /api/apps/{id}/promote", api.auth(http.HandlerFunc(api.promoteAdoptedApp)))
 	mux.Handle("PUT /api/apps/{id}/config", api.auth(http.HandlerFunc(api.appConfig)))

@@ -135,6 +135,21 @@ main { min-width: 0; padding: 32px clamp(20px, 4vw, 54px) 60px; }
 .backup-list small { margin-top: 5px; color: var(--muted); }
 .link-button { display: inline-flex; align-items: center; text-decoration: none; font-size: 12px; }
 .danger-button { padding: 8px 11px; color: var(--red); border: 1px solid rgba(251,113,133,.35); border-radius: 8px; background: rgba(251,113,133,.07); }
+.domain-health-list { display: grid; gap: 10px; margin-top: 18px; }
+.domain-health-list article { padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: #0c0f15; }
+.domain-health-list article.healthy { border-color: rgba(74,222,128,.32); }
+.domain-health-list article.warning { border-color: rgba(251,191,36,.45); }
+.domain-health-list article.failed { border-color: rgba(251,113,133,.38); }
+.domain-health-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.domain-health-head strong, .domain-health-head small { display: block; }
+.domain-health-head small { margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }
+.domain-health-head > span { color: var(--green); font-size: 12px; font-weight: 700; }
+.domain-health-list article.warning .domain-health-head > span { color: #fbbf24; }
+.domain-health-list article.failed .domain-health-head > span { color: var(--red); }
+.domain-health-list dl { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 13px 0 0; }
+.domain-health-list dl div { padding: 8px; border-radius: 8px; background: #11151e; }
+.domain-health-list dt { color: var(--muted); font-size: 10px; }
+.domain-health-list dd { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .panel-head, .section-intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .panel h3, .section-intro h3 { margin: 0; font-size: 18px; }
 .panel-head a { color: var(--accent-2); font-size: 12px; text-decoration: none; }
