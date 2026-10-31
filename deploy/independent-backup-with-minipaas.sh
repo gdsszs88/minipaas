@@ -2,6 +2,37 @@
 set -euo pipefail
 
 backup_root=/root/independent-backups
+retention_count=7
+
+cleanup_old_backups() {
+  local expired_name expired_path
+  local -a expired_backups
+
+  mapfile -t expired_backups < <(
+    find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
+      -regextype posix-extended \
+      -regex '.*/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}' \
+      -printf '%f\n' \
+    | sort -r \
+    | tail -n "+$((retention_count + 1))"
+  )
+
+  for expired_name in "${expired_backups[@]}"; do
+    expired_path="$backup_root/$expired_name"
+    case "$expired_path" in
+      "$backup_root"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+        echo "Removing expired VPS backup: $expired_path"
+        rm -rf -- "$expired_path"
+        ;;
+    esac
+  done
+}
+
+if [ "${1:-}" = "--cleanup-only" ]; then
+  cleanup_old_backups
+  exit 0
+fi
+
 stamp=$(date +%F_%H-%M-%S)
 target="$backup_root/$stamp"
 
@@ -80,3 +111,7 @@ fi
 
 chmod -R go-rwx "$target"
 ln -sfn "$target" "$backup_root/latest"
+
+# Keep only the newest recovery packages on the VPS. Off-server Windows
+# copies are not affected by this cleanup.
+cleanup_old_backups
