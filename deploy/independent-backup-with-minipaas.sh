@@ -5,14 +5,16 @@ backup_root=/root/independent-backups
 retention_count=7
 
 cleanup_old_backups() {
-  local expired_name expired_path
+  local candidate expired_name expired_path
   local -a expired_backups
 
   mapfile -t expired_backups < <(
-    find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
+    while IFS= read -r -d '' candidate; do
+      [ -f "$candidate/SHA256SUMS" ] && basename "$candidate"
+    done < <(find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
       -regextype posix-extended \
       -regex '.*/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}' \
-      -printf '%f\n' \
+      -print0) \
     | sort -r \
     | tail -n "+$((retention_count + 1))"
   )
@@ -28,7 +30,21 @@ cleanup_old_backups() {
   done
 }
 
+cleanup_incomplete_backups() {
+  local incomplete_path
+
+  while IFS= read -r -d '' incomplete_path; do
+    [ -f "$incomplete_path/SHA256SUMS" ] && continue
+    echo "Removing incomplete VPS backup: $incomplete_path"
+    rm -rf -- "$incomplete_path"
+  done < <(find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
+    -regextype posix-extended \
+    -regex '.*/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}' \
+    -mmin +60 -print0)
+}
+
 if [ "${1:-}" = "--cleanup-only" ]; then
+  cleanup_incomplete_backups
   cleanup_old_backups
   exit 0
 fi
@@ -38,6 +54,7 @@ target="$backup_root/$stamp"
 
 umask 077
 mkdir -p "$target/databases" "$target/manifests" "$target/system" "$target/images"
+trap 'rm -rf -- "$target"' ERR
 
 kubectl get namespace,deployment,statefulset,daemonset,service,ingress,pvc,pv,configmap,secret -A -o yaml \
   > "$target/manifests/cluster-resources.yaml"
@@ -77,11 +94,15 @@ done < <(
 )
 
 if [ -d /var/lib/minipaas ] && [ -f /var/lib/minipaas/master.key ]; then
+  tar_status=0
   tar -czf "$target/system/minipaas-control-plane.tar.gz" \
     /var/lib/minipaas \
     /etc/minipaas \
     /opt/minipaas/minipaas \
-    /etc/systemd/system/minipaas.service
+    /etc/systemd/system/minipaas.service || tar_status=$?
+  # GNU tar returns 1 when a live state file changes while being read. The
+  # archive remains usable; only fatal tar errors (2+) should abort backup.
+  [ "$tar_status" -le 1 ] || exit "$tar_status"
 fi
 
 cp -a /etc/independent-deploy.d "$target/system/" 2>/dev/null || true
@@ -111,7 +132,9 @@ fi
 
 chmod -R go-rwx "$target"
 ln -sfn "$target" "$backup_root/latest"
+trap - ERR
 
 # Keep only the newest recovery packages on the VPS. Off-server Windows
 # copies are not affected by this cleanup.
+cleanup_incomplete_backups
 cleanup_old_backups
