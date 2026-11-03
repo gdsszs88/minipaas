@@ -70,24 +70,29 @@ type ProxyHeader struct {
 }
 
 type ProxyRoute struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name"`
-	Enabled        bool          `json:"enabled"`
-	PathPrefix     string        `json:"pathPrefix"`
-	Upstream       string        `json:"upstream"`
-	StripPrefix    bool          `json:"stripPrefix"`
-	UpstreamHost   string        `json:"upstreamHost,omitempty"`
-	Streaming      bool          `json:"streaming"`
-	RequestHeaders []ProxyHeader `json:"requestHeaders,omitempty"`
-	Sort           int           `json:"sort"`
+	ID                string        `json:"id"`
+	AppID             string        `json:"appId"`
+	Name              string        `json:"name"`
+	ProxyType         string        `json:"proxyType,omitempty"`
+	SupabaseProjectID string        `json:"supabaseProjectId,omitempty"`
+	Enabled           bool          `json:"enabled"`
+	PathPrefix        string        `json:"pathPrefix"`
+	Upstream          string        `json:"upstream"`
+	StripPrefix       bool          `json:"stripPrefix"`
+	UpstreamHost      string        `json:"upstreamHost,omitempty"`
+	Streaming         bool          `json:"streaming"`
+	RequestHeaders    []ProxyHeader `json:"requestHeaders,omitempty"`
+	Sort              int           `json:"sort"`
 }
 
 type SubscriptionRouting struct {
-	Enabled          bool     `json:"enabled"`
-	Domains          []string `json:"domains,omitempty"`
-	Upstream         string   `json:"upstream"`
-	UpstreamHost     string   `json:"upstreamHost"`
-	AuthorizationURL string   `json:"authorizationUrl"`
+	AppID             string   `json:"appId"`
+	SupabaseProjectID string   `json:"supabaseProjectId,omitempty"`
+	Enabled           bool     `json:"enabled"`
+	Domains           []string `json:"domains,omitempty"`
+	Upstream          string   `json:"upstream"`
+	UpstreamHost      string   `json:"upstreamHost"`
+	AuthorizationURL  string   `json:"authorizationUrl"`
 }
 
 type DeploymentRevision struct {
@@ -171,12 +176,13 @@ type AuditEvent struct {
 }
 
 type State struct {
-	Servers             []Server            `json:"servers"`
-	Apps                []App               `json:"apps"`
-	Databases           []Database          `json:"databases"`
-	Audit               []AuditEvent        `json:"audit"`
-	SubscriptionRouting SubscriptionRouting `json:"subscriptionRouting,omitempty"`
-	CaddyBaseConfigs    map[string]string   `json:"caddyBaseConfigs,omitempty"`
+	Servers             []Server              `json:"servers"`
+	Apps                []App                 `json:"apps"`
+	Databases           []Database            `json:"databases"`
+	Audit               []AuditEvent          `json:"audit"`
+	SubscriptionRouting SubscriptionRouting   `json:"subscriptionRouting,omitempty"` // legacy v1.13.0 migration input
+	SubscriptionRoutes  []SubscriptionRouting `json:"subscriptionRoutes,omitempty"`
+	CaddyBaseConfigs    map[string]string     `json:"caddyBaseConfigs,omitempty"`
 }
 
 type Store struct {

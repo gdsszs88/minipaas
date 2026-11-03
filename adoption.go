@@ -41,6 +41,10 @@ func (a *API) adoptedDomainsUpdate(w http.ResponseWriter, r *http.Request) {
 			domains = append(domains, host)
 		}
 	}
+	if err := validateAppDomainOwnership(a.store.Snapshot(), app.ID, domains); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
 	key, err := a.secrets.Decrypt(server.Credential)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "无法读取服务器凭据"})

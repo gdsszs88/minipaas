@@ -170,9 +170,19 @@ func (a *API) appDelete(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.Apps = filtered
+			subscriptions := s.SubscriptionRoutes[:0]
+			for _, item := range s.SubscriptionRoutes {
+				if item.AppID != id {
+					subscriptions = append(subscriptions, item)
+				}
+			}
+			s.SubscriptionRoutes = subscriptions
 			appendAudit(s, "app.detach", id, "已从面板移除接管记录，K3s 服务未删除："+app.Name, nil)
 			return nil
 		})
+		caddyCtx, caddyCancel := context.WithTimeout(r.Context(), 5*time.Minute)
+		_, _, _ = a.applyCaddyForServer(caddyCtx, server.ID)
+		caddyCancel()
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -237,6 +247,13 @@ fi
 			}
 		}
 		s.Apps = filtered
+		subscriptions := s.SubscriptionRoutes[:0]
+		for _, item := range s.SubscriptionRoutes {
+			if item.AppID != id {
+				subscriptions = append(subscriptions, item)
+			}
+		}
+		s.SubscriptionRoutes = subscriptions
 		appendAudit(s, "app.delete", id, "已删除应用 "+app.Name, nil)
 		return nil
 	})

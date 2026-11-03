@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	defaultSupabaseUpstream = "https://ltvyvkdntvgicumfzgjy.supabase.co"
-	defaultSupabaseHost     = "ltvyvkdntvgicumfzgjy.supabase.co"
+	jiedianMigrationUpstream = "https://ltvyvkdntvgicumfzgjy.supabase.co"
+	jiedianMigrationHost     = "ltvyvkdntvgicumfzgjy.supabase.co"
 )
 
 var (
@@ -34,8 +34,20 @@ type proxyRoutePayload struct {
 	SubscriptionDomains []string     `json:"subscriptionDomains,omitempty"`
 }
 
-func defaultSubscriptionRouting() SubscriptionRouting {
-	return SubscriptionRouting{Enabled: true, Domains: []string{"dy.ip520.top"}, Upstream: defaultSupabaseUpstream, UpstreamHost: defaultSupabaseHost, AuthorizationURL: defaultSupabaseUpstream + "/functions/v1/subscription/domain-authorized"}
+func inferSupabaseProjectID(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if !strings.HasSuffix(host, ".supabase.co") {
+		return ""
+	}
+	project := strings.TrimSuffix(host, ".supabase.co")
+	if regexp.MustCompile(`^[a-z0-9]{10,40}$`).MatchString(project) {
+		return project
+	}
+	return ""
 }
 
 func (a *API) ensureRoutingDefaults() {
@@ -43,9 +55,22 @@ func (a *API) ensureRoutingDefaults() {
 		if s.CaddyBaseConfigs == nil {
 			s.CaddyBaseConfigs = map[string]string{}
 		}
-		if strings.TrimSpace(s.SubscriptionRouting.Upstream) == "" {
-			s.SubscriptionRouting = defaultSubscriptionRouting()
+		jiedianID := ""
+		for _, app := range s.Apps {
+			if strings.EqualFold(app.Name, "jiedianshangcheng3.0") {
+				jiedianID = app.ID
+			}
 		}
+		if len(s.SubscriptionRoutes) == 0 && jiedianID != "" {
+			legacy := s.SubscriptionRouting
+			if strings.TrimSpace(legacy.Upstream) == "" {
+				legacy = SubscriptionRouting{Enabled: true, Domains: []string{"dy.ip520.top"}, Upstream: jiedianMigrationUpstream, UpstreamHost: jiedianMigrationHost, AuthorizationURL: jiedianMigrationUpstream + "/functions/v1/subscription/domain-authorized"}
+			}
+			legacy.AppID = jiedianID
+			legacy.SupabaseProjectID = inferSupabaseProjectID(legacy.Upstream)
+			s.SubscriptionRoutes = []SubscriptionRouting{legacy}
+		}
+		s.SubscriptionRouting = SubscriptionRouting{}
 		for i := range s.Apps {
 			if len(s.Apps[i].Revisions) > 0 {
 				collapsed := make([]DeploymentRevision, 0, len(s.Apps[i].Revisions))
@@ -54,17 +79,26 @@ func (a *API) ensureRoutingDefaults() {
 				}
 				s.Apps[i].Revisions = collapsed
 			}
-			if !strings.EqualFold(s.Apps[i].Name, "jiedianshangcheng3.0") {
-				continue
-			}
 			found := false
-			for _, route := range s.Apps[i].ProxyRoutes {
+			for routeIndex := range s.Apps[i].ProxyRoutes {
+				route := &s.Apps[i].ProxyRoutes[routeIndex]
+				route.AppID = s.Apps[i].ID
+				if project := inferSupabaseProjectID(route.Upstream); project != "" {
+					if route.ProxyType == "" {
+						route.ProxyType = "supabase"
+					}
+					if route.SupabaseProjectID == "" {
+						route.SupabaseProjectID = project
+					}
+				} else if route.ProxyType == "" {
+					route.ProxyType = "generic"
+				}
 				if route.PathPrefix == "/supabase/*" {
 					found = true
 				}
 			}
-			if !found {
-				s.Apps[i].ProxyRoutes = append(s.Apps[i].ProxyRoutes, ProxyRoute{ID: newID("route"), Name: "Supabase 同源代理", Enabled: true, PathPrefix: "/supabase/*", Upstream: defaultSupabaseUpstream, StripPrefix: true, UpstreamHost: defaultSupabaseHost, Streaming: true, Sort: 10})
+			if strings.EqualFold(s.Apps[i].Name, "jiedianshangcheng3.0") && !found {
+				s.Apps[i].ProxyRoutes = append(s.Apps[i].ProxyRoutes, ProxyRoute{ID: newID("route"), AppID: s.Apps[i].ID, Name: "Supabase 同源代理", ProxyType: "supabase", SupabaseProjectID: inferSupabaseProjectID(jiedianMigrationUpstream), Enabled: true, PathPrefix: "/supabase/*", Upstream: jiedianMigrationUpstream, StripPrefix: true, UpstreamHost: jiedianMigrationHost, Streaming: true, Sort: 10})
 				s.Apps[i].UpdatedAt = time.Now()
 			}
 		}
@@ -73,11 +107,13 @@ func (a *API) ensureRoutingDefaults() {
 }
 
 func normalizedSubscription(value SubscriptionRouting) SubscriptionRouting {
-	if strings.TrimSpace(value.Upstream) == "" {
-		return defaultSubscriptionRouting()
-	}
 	if value.UpstreamHost == "" {
-		value.UpstreamHost = defaultSupabaseHost
+		if u, err := url.Parse(value.Upstream); err == nil {
+			value.UpstreamHost = u.Hostname()
+		}
+	}
+	if value.SupabaseProjectID == "" {
+		value.SupabaseProjectID = inferSupabaseProjectID(value.Upstream)
 	}
 	if value.AuthorizationURL == "" {
 		value.AuthorizationURL = strings.TrimRight(value.Upstream, "/") + "/functions/v1/subscription/domain-authorized"
@@ -127,9 +163,13 @@ func validateExternalUpstream(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-func normalizeProxyRoutes(routes []ProxyRoute) ([]ProxyRoute, error) {
+func normalizeProxyRoutes(appID string, routes []ProxyRoute) ([]ProxyRoute, error) {
 	result, ids := make([]ProxyRoute, 0, len(routes)), map[string]bool{}
 	for index, route := range routes {
+		if route.AppID != "" && route.AppID != appID {
+			return nil, fmt.Errorf("路由 %s 绑定的 appId 与当前应用不一致", route.Name)
+		}
+		route.AppID = appID
 		route.Name = strings.TrimSpace(route.Name)
 		route.PathPrefix = strings.TrimSpace(route.PathPrefix)
 		route.Upstream = strings.TrimRight(strings.TrimSpace(route.Upstream), "/")
@@ -149,6 +189,26 @@ func normalizeProxyRoutes(routes []ProxyRoute) ([]ProxyRoute, error) {
 		}
 		if route.UpstreamHost == "" {
 			route.UpstreamHost = u.Hostname()
+		}
+		if route.ProxyType == "" {
+			route.ProxyType = "generic"
+		}
+		if route.ProxyType != "generic" && route.ProxyType != "supabase" {
+			return nil, fmt.Errorf("路由 %s 的代理类型不正确", route.Name)
+		}
+		if route.ProxyType == "supabase" {
+			project := inferSupabaseProjectID(route.Upstream)
+			if project == "" {
+				return nil, fmt.Errorf("路由 %s 的上游不是有效的 Supabase 项目域名", route.Name)
+			}
+			if route.SupabaseProjectID == "" {
+				route.SupabaseProjectID = project
+			}
+			if route.SupabaseProjectID != project {
+				return nil, fmt.Errorf("路由 %s 的 Supabase Project ID 与上游域名不一致", route.Name)
+			}
+		} else {
+			route.SupabaseProjectID = ""
 		}
 		if !domainPattern.MatchString(route.UpstreamHost) || net.ParseIP(route.UpstreamHost) != nil {
 			return nil, fmt.Errorf("路由 %s 的 Host 请求头格式不正确", route.Name)
@@ -187,6 +247,109 @@ func normalizeDomains(values []string) ([]string, error) {
 	return result, nil
 }
 
+func subscriptionForApp(state State, appID string) (SubscriptionRouting, bool) {
+	for _, item := range state.SubscriptionRoutes {
+		if item.AppID == appID {
+			return normalizedSubscription(item), true
+		}
+	}
+	return SubscriptionRouting{}, false
+}
+
+func validateRoutingConflicts(state State, appID string, routes []ProxyRoute, subscriptionDomains []string) error {
+	paths := map[string]string{}
+	for _, route := range routes {
+		if !route.Enabled {
+			continue
+		}
+		path := strings.ToLower(route.PathPrefix)
+		if owner := paths[path]; owner != "" {
+			return fmt.Errorf("路径冲突：%s 与 %s 都使用 %s", owner, route.Name, route.PathPrefix)
+		}
+		paths[path] = route.Name
+	}
+	domainOwners := map[string]string{}
+	for _, app := range state.Apps {
+		for _, domain := range app.Domains {
+			host := strings.ToLower(domain.Host)
+			if previous := domainOwners[host]; previous != "" && previous != app.ID {
+				return fmt.Errorf("域名冲突：%s 已同时绑定多个应用", host)
+			}
+			domainOwners[host] = app.ID
+		}
+	}
+	for _, host := range subscriptionDomains {
+		if owner := domainOwners[host]; owner != "" {
+			if owner == appID {
+				return fmt.Errorf("域名冲突：%s 不能同时作为网站域名和订阅域名", host)
+			}
+			return fmt.Errorf("订阅域名冲突：%s 已属于其他应用", host)
+		}
+		for _, subscription := range state.SubscriptionRoutes {
+			if subscription.AppID == appID {
+				continue
+			}
+			for _, existing := range subscription.Domains {
+				if strings.EqualFold(existing, host) {
+					return fmt.Errorf("订阅域名冲突：%s 已属于 appId %s", host, subscription.AppID)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateAppDomainOwnership(state State, appID string, domains []string) error {
+	for _, requested := range domains {
+		for _, app := range state.Apps {
+			if app.ID == appID {
+				continue
+			}
+			for _, domain := range app.Domains {
+				if strings.EqualFold(domain.Host, requested) {
+					return fmt.Errorf("域名冲突：%s 已属于应用 %s", requested, app.Name)
+				}
+			}
+		}
+		for _, subscription := range state.SubscriptionRoutes {
+			if subscription.AppID == appID {
+				continue
+			}
+			for _, domain := range subscription.Domains {
+				if strings.EqualFold(domain, requested) {
+					return fmt.Errorf("域名冲突：%s 已是其他应用的订阅域名", requested)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (a *API) appSupabaseSuggestion(app App) (string, string) {
+	projectID, directURL := "", ""
+	for _, variable := range app.Variables {
+		if variable.Key != "VITE_SUPABASE_URL" && variable.Key != "VITE_SUPABASE_PROJECT_ID" {
+			continue
+		}
+		plain, err := a.secrets.Decrypt(variable.EncryptedValue)
+		if err != nil {
+			continue
+		}
+		if variable.Key == "VITE_SUPABASE_PROJECT_ID" {
+			projectID = strings.TrimSpace(string(plain))
+		} else {
+			directURL = strings.TrimRight(strings.TrimSpace(string(plain)), "/")
+		}
+	}
+	if inferred := inferSupabaseProjectID(directURL); inferred != "" {
+		return directURL, inferred
+	}
+	if regexp.MustCompile(`^[a-z0-9]{10,40}$`).MatchString(projectID) {
+		return "https://" + projectID + ".supabase.co", projectID
+	}
+	return "", ""
+}
+
 func caddyQuote(value string) string {
 	return strconv.Quote(value)
 }
@@ -219,13 +382,25 @@ func renderProxyRoute(route ProxyRoute) string {
 }
 
 func renderManagedCaddy(state State, serverID string) string {
-	base := strings.TrimSpace(state.CaddyBaseConfigs[serverID])
-	subscription := normalizedSubscription(state.SubscriptionRouting)
-	if !strings.Contains(base, "on_demand_tls") {
-		base = fmt.Sprintf("{\n  auto_https disable_redirects\n  on_demand_tls {\n    ask %s\n  }\n}\n\n%s", subscription.AuthorizationURL, base)
+	base := stripOnDemandGlobal(strings.TrimSpace(state.CaddyBaseConfigs[serverID]))
+	appServer := map[string]string{}
+	for _, app := range state.Apps {
+		appServer[app.ID] = app.ServerID
+	}
+	subscriptions := []SubscriptionRouting{}
+	for _, item := range state.SubscriptionRoutes {
+		item = normalizedSubscription(item)
+		if item.Enabled && item.AppID != "" && appServer[item.AppID] == serverID {
+			subscriptions = append(subscriptions, item)
+		}
 	}
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(base))
+	b.WriteString("{\n  auto_https disable_redirects\n")
+	if len(subscriptions) == 1 && subscriptions[0].AuthorizationURL != "" {
+		fmt.Fprintf(&b, "  on_demand_tls {\n    ask %s\n  }\n", subscriptions[0].AuthorizationURL)
+	}
+	b.WriteString("}\n\n")
+	b.WriteString(base)
 	b.WriteString("\n\n# BEGIN MINIPAAS PERSISTENT ROUTES\n")
 	apps := append([]App(nil), state.Apps...)
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
@@ -246,20 +421,25 @@ func renderManagedCaddy(state State, serverID string) string {
 		routes := append([]ProxyRoute(nil), app.ProxyRoutes...)
 		sort.SliceStable(routes, func(i, j int) bool { return routes[i].Sort < routes[j].Sort })
 		for _, route := range routes {
-			if route.Enabled {
+			if route.Enabled && route.AppID == app.ID {
 				b.WriteString(renderProxyRoute(route))
 			}
 		}
 		fmt.Fprintf(&b, "  handle {\n    reverse_proxy %s\n  }\n}\n", appCaddyTarget(app))
 	}
-	if subscription.Enabled {
+	for subscriptionIndex, subscription := range subscriptions {
 		domains, _ := normalizeDomains(subscription.Domains)
 		if len(domains) > 0 {
 			headers := []string{}
 			for _, domain := range domains {
 				headers = append(headers, "http://"+domain, "https://"+domain)
 			}
-			fmt.Fprintf(&b, "\n# subscription:explicit\n%s {\n  encode zstd gzip\n  @subscription path_regexp subscription ^/s/([0-9a-fA-F-]+)$\n  handle @subscription {\n    rewrite * /functions/v1/subscription?token={re.subscription.1}\n    reverse_proxy %s {\n      header_up Host %s\n      flush_interval -1\n    }\n  }\n  respond \"订阅地址无效\" 404\n}\n", strings.Join(headers, ", "), subscription.Upstream, caddyQuote(subscription.UpstreamHost))
+			fmt.Fprintf(&b, "\n# subscription:app:%s project:%s\n%s {\n  encode zstd gzip\n  @subscription path_regexp subscription ^/s/([0-9a-fA-F-]+)$\n  handle @subscription {\n    rewrite * /functions/v1/subscription?token={re.subscription.1}\n    reverse_proxy %s {\n      header_up Host %s\n      flush_interval -1\n    }\n  }\n  respond \"订阅地址无效\" 404\n}\n", subscription.AppID, subscription.SupabaseProjectID, strings.Join(headers, ", "), subscription.Upstream, caddyQuote(subscription.UpstreamHost))
+		}
+		// A dynamic hostname can only be mapped safely when exactly one app owns
+		// subscription routing. With multiple apps, explicit domains stay isolated.
+		if len(subscriptions) != 1 || subscriptionIndex > 0 {
+			continue
 		}
 		for _, port := range []string{":80", ":443"} {
 			fmt.Fprintf(&b, "\n%s {\n", port)
@@ -273,15 +453,49 @@ func renderManagedCaddy(state State, serverID string) string {
 	return b.String()
 }
 
-func extractCaddyBase(current string, apps []App, subscription SubscriptionRouting) string {
+func stripOnDemandGlobal(input string) string {
+	lines := strings.Split(input, "\n")
+	var result, block []string
+	depth := 0
+	for _, line := range lines {
+		if depth == 0 && strings.Contains(line, "{") {
+			block = []string{line}
+			depth = strings.Count(line, "{") - strings.Count(line, "}")
+			if depth > 0 {
+				continue
+			}
+		}
+		if depth > 0 {
+			block = append(block, line)
+			depth += strings.Count(line, "{") - strings.Count(line, "}")
+			if depth > 0 {
+				continue
+			}
+		}
+		if len(block) > 0 {
+			text := strings.Join(block, "\n")
+			if !strings.Contains(text, "on_demand_tls") && !strings.HasPrefix(strings.TrimSpace(block[0]), "{") {
+				result = append(result, text)
+			}
+			block = nil
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
+}
+
+func extractCaddyBase(current string, apps []App, subscriptions []SubscriptionRouting) string {
 	domains := map[string]bool{}
 	for _, app := range apps {
 		for _, domain := range app.Domains {
 			domains[strings.ToLower(domain.Host)] = true
 		}
 	}
-	for _, domain := range subscription.Domains {
-		domains[strings.ToLower(domain)] = true
+	for _, subscription := range subscriptions {
+		for _, domain := range subscription.Domains {
+			domains[strings.ToLower(domain)] = true
+		}
 	}
 	lines := strings.Split(current, "\n")
 	var result, block []string
@@ -351,7 +565,7 @@ func (a *API) applyCaddyForServer(ctx context.Context, serverID string) (bool, s
 		return false, current, fmt.Errorf("无法读取 Caddy ConfigMap: %w", err)
 	}
 	if strings.TrimSpace(state.CaddyBaseConfigs[serverID]) == "" {
-		base := extractCaddyBase(current, state.Apps, normalizedSubscription(state.SubscriptionRouting))
+		base := extractCaddyBase(current, state.Apps, state.SubscriptionRoutes)
 		if err := a.store.mutate(func(s *State) error {
 			if s.CaddyBaseConfigs == nil {
 				s.CaddyBaseConfigs = map[string]string{}
@@ -409,7 +623,17 @@ func (a *API) appProxyRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		state := a.store.Snapshot()
-		writeJSON(w, http.StatusOK, map[string]any{"appId": app.ID, "app": app.Name, "routes": app.ProxyRoutes, "subscriptionDomains": normalizedSubscription(state.SubscriptionRouting).Domains})
+		subscription, _ := subscriptionForApp(state, app.ID)
+		suggestion, projectID := a.appSupabaseSuggestion(app)
+		domains := make([]string, 0, len(app.Domains))
+		for _, domain := range app.Domains {
+			domains = append(domains, domain.Host)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"appId": app.ID, "app": app.Name, "domains": domains, "routes": app.ProxyRoutes,
+			"subscriptionDomains": subscription.Domains, "supabaseSuggestion": suggestion,
+			"supabaseProjectId": projectID,
+		})
 		return
 	}
 	var input proxyRoutePayload
@@ -417,7 +641,7 @@ func (a *API) appProxyRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	routes, err := normalizeProxyRoutes(input.Routes)
+	routes, err := normalizeProxyRoutes(app.ID, input.Routes)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -429,21 +653,56 @@ func (a *API) appProxyRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	before := a.store.Snapshot()
 	if err := a.store.mutate(func(s *State) error {
+		if err := validateRoutingConflicts(*s, app.ID, routes, domains); err != nil {
+			return err
+		}
 		for i := range s.Apps {
 			if s.Apps[i].ID == app.ID {
 				s.Apps[i].ProxyRoutes, s.Apps[i].UpdatedAt = routes, time.Now()
 			}
 		}
-		if len(domains) > 0 {
-			sub := normalizedSubscription(s.SubscriptionRouting)
+		subscriptionIndex := -1
+		for i := range s.SubscriptionRoutes {
+			if s.SubscriptionRoutes[i].AppID == app.ID {
+				subscriptionIndex = i
+				break
+			}
+		}
+		if subscriptionIndex >= 0 {
+			sub := normalizedSubscription(s.SubscriptionRoutes[subscriptionIndex])
 			merged := append(append([]string(nil), sub.Domains...), domains...)
 			sub.Domains, _ = normalizeDomains(merged)
-			s.SubscriptionRouting = sub
+			for i := range routes {
+				if routes[i].ProxyType == "supabase" {
+					sub.SupabaseProjectID = routes[i].SupabaseProjectID
+					sub.Upstream = routes[i].Upstream
+					sub.UpstreamHost = routes[i].UpstreamHost
+					sub.AuthorizationURL = strings.TrimRight(routes[i].Upstream, "/") + "/functions/v1/subscription/domain-authorized"
+					break
+				}
+			}
+			s.SubscriptionRoutes[subscriptionIndex] = sub
+		} else if len(domains) > 0 {
+			var supabase *ProxyRoute
+			for i := range routes {
+				if routes[i].ProxyType == "supabase" {
+					supabase = &routes[i]
+					break
+				}
+			}
+			if supabase == nil {
+				return fmt.Errorf("配置订阅域名前，当前应用必须先添加 Supabase 类型代理")
+			}
+			s.SubscriptionRoutes = append(s.SubscriptionRoutes, normalizedSubscription(SubscriptionRouting{
+				AppID: app.ID, SupabaseProjectID: supabase.SupabaseProjectID, Enabled: true,
+				Domains: domains, Upstream: supabase.Upstream, UpstreamHost: supabase.UpstreamHost,
+				AuthorizationURL: strings.TrimRight(supabase.Upstream, "/") + "/functions/v1/subscription/domain-authorized",
+			}))
 		}
 		appendAudit(s, "app.proxy-routes.update", app.ID, "已更新应用 "+app.Name+" 的反向代理路由", map[string]any{"routes": len(routes)})
 		return nil
 	}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
@@ -475,7 +734,7 @@ func (a *API) appProxyRouteHealth(w http.ResponseWriter, r *http.Request) {
 	var checks []string
 	for _, domain := range app.Domains {
 		for _, route := range app.ProxyRoutes {
-			if route.Enabled {
+			if route.Enabled && route.AppID == app.ID {
 				path := strings.TrimSuffix(route.PathPrefix, "*")
 				checks = append(checks, fmt.Sprintf("printf '%%s ' '%s%s'; curl -sS -o /dev/null -w 'HTTP %%{http_code} time=%%{time_total}s\\n' --max-time 20 '%s%s' || true", domain.Host, path, "https://"+domain.Host, path))
 			}
@@ -491,7 +750,9 @@ func (a *API) appProxyRouteExport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	payload := map[string]any{"version": 1, "app": app.Name, "appId": app.ID, "routes": app.ProxyRoutes, "subscriptionRouting": normalizedSubscription(a.store.Snapshot().SubscriptionRouting), "exportedAt": time.Now()}
+	state := a.store.Snapshot()
+	subscription, _ := subscriptionForApp(state, app.ID)
+	payload := map[string]any{"version": 2, "app": app.Name, "appId": app.ID, "routes": app.ProxyRoutes, "subscriptionRouting": subscription, "exportedAt": time.Now()}
 	w.Header().Set("Content-Disposition", `attachment; filename="minipaas-proxy-routes.json"`)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
@@ -508,6 +769,20 @@ func (a *API) appProxyRouteRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if input.AppID == "" || input.AppID != r.PathValue("id") {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "恢复包 appId 与当前应用不一致，已阻止跨应用恢复"})
+		return
+	}
+	for _, route := range input.Routes {
+		if route.AppID != input.AppID {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "恢复包包含不属于当前应用的代理路由"})
+			return
+		}
+	}
+	if input.SubscriptionRouting.AppID != "" && input.SubscriptionRouting.AppID != input.AppID {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "恢复包订阅路由不属于当前应用"})
 		return
 	}
 	requestBody, _ := json.Marshal(proxyRoutePayload{Routes: input.Routes, SubscriptionDomains: input.SubscriptionRouting.Domains})
