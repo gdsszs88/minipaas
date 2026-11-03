@@ -350,6 +350,47 @@ func (a *API) appSupabaseSuggestion(app App) (string, string) {
 	return "", ""
 }
 
+func (a *API) appProxySuggestions(app App) []ProxyRoute {
+	suggestions, seen := []ProxyRoute{}, map[string]bool{}
+	supabaseURL, supabaseProject := a.appSupabaseSuggestion(app)
+	if supabaseURL != "" {
+		host, _ := url.Parse(supabaseURL)
+		suggestions = append(suggestions, ProxyRoute{AppID: app.ID, Name: "Supabase 同源代理", ProxyType: "supabase", SupabaseProjectID: supabaseProject, Enabled: true, PathPrefix: "/supabase/*", Upstream: supabaseURL, StripPrefix: true, UpstreamHost: host.Hostname(), Streaming: true, Sort: 10})
+		seen[supabaseURL] = true
+	}
+	for _, variable := range app.Variables {
+		key := strings.ToUpper(strings.TrimSpace(variable.Key))
+		if !(key == "API_URL" || key == "BACKEND_URL" || key == "API_BASE_URL" || strings.HasSuffix(key, "_API_URL") || strings.HasSuffix(key, "_BACKEND_URL") || strings.HasSuffix(key, "_API_BASE_URL")) {
+			continue
+		}
+		plain, err := a.secrets.Decrypt(variable.EncryptedValue)
+		if err != nil {
+			continue
+		}
+		raw := strings.TrimRight(strings.TrimSpace(string(plain)), "/")
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || seen[raw] {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if forbiddenHostnames[host] || net.ParseIP(host) != nil || !domainPattern.MatchString(host) {
+			continue
+		}
+		ownDomain := false
+		for _, domain := range app.Domains {
+			if strings.EqualFold(domain.Host, host) {
+				ownDomain = true
+			}
+		}
+		if ownDomain {
+			continue
+		}
+		seen[raw] = true
+		suggestions = append(suggestions, ProxyRoute{AppID: app.ID, Name: variable.Key + " 自动代理", ProxyType: "generic", Enabled: true, PathPrefix: "/api/*", Upstream: raw, StripPrefix: true, UpstreamHost: host, Streaming: true, Sort: 20 + len(suggestions)*10})
+	}
+	return suggestions
+}
+
 func caddyQuote(value string) string {
 	return strconv.Quote(value)
 }
@@ -625,6 +666,7 @@ func (a *API) appProxyRoutes(w http.ResponseWriter, r *http.Request) {
 		state := a.store.Snapshot()
 		subscription, _ := subscriptionForApp(state, app.ID)
 		suggestion, projectID := a.appSupabaseSuggestion(app)
+		suggestions := a.appProxySuggestions(app)
 		domains := make([]string, 0, len(app.Domains))
 		for _, domain := range app.Domains {
 			domains = append(domains, domain.Host)
@@ -632,7 +674,7 @@ func (a *API) appProxyRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"appId": app.ID, "app": app.Name, "domains": domains, "routes": app.ProxyRoutes,
 			"subscriptionDomains": subscription.Domains, "supabaseSuggestion": suggestion,
-			"supabaseProjectId": projectID,
+			"supabaseProjectId": projectID, "suggestions": suggestions,
 		})
 		return
 	}

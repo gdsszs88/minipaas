@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,36 @@ func TestSupabaseProjectMustMatchUpstream(t *testing.T) {
 	route.SupabaseProjectID = "bbbbbbbbbbbbbbbbbbbb"
 	if _, err := normalizeProxyRoutes("app-a", []ProxyRoute{route}); err == nil || !strings.Contains(err.Error(), "Project ID") {
 		t.Fatalf("expected project mismatch, got %v", err)
+	}
+}
+
+func TestProxySuggestionsOnlyUseCurrentAppVariables(t *testing.T) {
+	box, err := OpenSecretBox(filepath.Join(t.TempDir(), "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypt := func(value string) string {
+		ciphertext, encryptErr := box.Encrypt([]byte(value))
+		if encryptErr != nil {
+			t.Fatal(encryptErr)
+		}
+		return ciphertext
+	}
+	app := App{ID: "app-a", Domains: []Domain{{Host: "a.example.com"}}, Variables: []Variable{
+		{Key: "VITE_SUPABASE_URL", EncryptedValue: encrypt("https://a.example.com/supabase")},
+		{Key: "VITE_SUPABASE_PROJECT_ID", EncryptedValue: encrypt("ltvyvkdntvgicumfzgjy")},
+		{Key: "VITE_API_URL", EncryptedValue: encrypt("https://api-a.example.com")},
+	}}
+	api := API{secrets: box}
+	suggestions := api.appProxySuggestions(app)
+	if len(suggestions) != 2 {
+		t.Fatalf("expected Supabase and API suggestions, got %#v", suggestions)
+	}
+	if suggestions[0].AppID != "app-a" || suggestions[0].SupabaseProjectID != "ltvyvkdntvgicumfzgjy" || suggestions[0].Upstream != "https://ltvyvkdntvgicumfzgjy.supabase.co" {
+		t.Fatalf("unexpected app-scoped Supabase suggestion: %#v", suggestions[0])
+	}
+	if suggestions[1].AppID != "app-a" || suggestions[1].Upstream != "https://api-a.example.com" {
+		t.Fatalf("unexpected app-scoped API suggestion: %#v", suggestions[1])
 	}
 }
 
