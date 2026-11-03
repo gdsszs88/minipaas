@@ -74,6 +74,31 @@ func (a *API) appDeploy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "无法读取服务器凭据"})
 		return
 	}
+	targetCommit := app.GitCommit
+	if app.SourceType == "git" {
+		commitCtx, commitCancel := context.WithTimeout(r.Context(), time.Minute)
+		if current, commitErr := a.currentGitCommit(commitCtx, app, server, key); commitErr == nil {
+			targetCommit = current
+		}
+		commitCancel()
+		if targetCommit != "" && targetCommit == app.GitCommit && app.Status == "running" && r.URL.Query().Get("force") != "true" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "gitCommit": targetCommit, "output": "该 Git 提交已部署，已跳过去重"})
+			return
+		}
+	}
+	a.deployMu.Lock()
+	if activeCommit, active := a.activeDeploys[app.ID]; active {
+		a.deployMu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "该应用已有部署任务正在运行；提交 " + activeCommit + " 不会并行重复部署"})
+		return
+	}
+	a.activeDeploys[app.ID] = targetCommit
+	a.deployMu.Unlock()
+	defer func() {
+		a.deployMu.Lock()
+		delete(a.activeDeploys, app.ID)
+		a.deployMu.Unlock()
+	}()
 	if app.ManagedMode == "adopted" {
 		a.restartAdoptedApp(w, r, app, server, key)
 		return
@@ -157,6 +182,13 @@ func (a *API) appDeploy(w http.ResponseWriter, r *http.Request) {
 		appendAudit(state, "app.deploy", app.ID, "应用 "+app.Name+" 部署成功", map[string]any{"image": image})
 		return nil
 	})
+	caddyCtx, caddyCancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	_, caddyOutput, caddyErr := a.applyCaddyForServer(caddyCtx, server.ID)
+	caddyCancel()
+	if caddyErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "应用已部署，但持久化域名路由恢复失败", "output": tailText(caddyOutput, 6000)})
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "image": image, "output": tailText(output, 12000)})
 }
 
@@ -225,12 +257,19 @@ func appendRevision(items []DeploymentRevision, revision DeploymentRevision) []D
 	if revision.DeployedAt.IsZero() {
 		revision.DeployedAt = time.Now()
 	}
+	filtered := items[:0]
 	for _, item := range items {
-		if item.Image == revision.Image && item.GitCommit == revision.GitCommit {
-			return items
+		// A Git commit represents one deployable source version. Configuration
+		// rebuilds may replace its image, but must not create duplicate history.
+		if revision.GitCommit != "" && item.GitCommit == revision.GitCommit {
+			continue
 		}
+		if revision.GitCommit == "" && item.Image == revision.Image {
+			continue
+		}
+		filtered = append(filtered, item)
 	}
-	items = append(items, revision)
+	items = append(filtered, revision)
 	if len(items) > 12 {
 		items = items[len(items)-12:]
 	}
@@ -323,6 +362,13 @@ k3s kubectl -n minipaas-apps get deployment/%s -o wide
 		appendAudit(s, "app.rollback", app.ID, "应用 "+app.Name+" 已回滚", map[string]any{"image": target.Image})
 		return nil
 	})
+	caddyCtx, caddyCancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	_, caddyOutput, caddyErr := a.applyCaddyForServer(caddyCtx, server.ID)
+	caddyCancel()
+	if caddyErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "应用已回滚，但持久化域名路由恢复失败", "output": tailText(caddyOutput, 6000)})
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "image": target.Image, "output": tailText(out, 5000)})
 }
 
@@ -549,6 +595,12 @@ func (a *API) appConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			state.Apps[i].Port, state.Apps[i].Variables, state.Apps[i].DatabaseID, state.Apps[i].UpdatedAt = input.Port, variables, input.DatabaseID, time.Now()
 			state.Apps[i].SourceType, state.Apps[i].Repository, state.Apps[i].Branch, state.Apps[i].BuildType = input.SourceType, input.Repository, input.Branch, input.BuildType
+			// A configuration change must be allowed to rebuild the same source
+			// commit once. The successful deployment records the commit again.
+			state.Apps[i].GitCommit = ""
+			if state.Apps[i].ManagedMode == "" {
+				state.Apps[i].Status = "draft"
+			}
 			if input.AutoDeploy != nil {
 				state.Apps[i].AutoDeploy = *input.AutoDeploy
 			}
@@ -671,13 +723,6 @@ func shellB64(value string) string { return base64.StdEncoding.EncodeToString([]
 
 func buildDeployScript(app App, manifest []byte, image, buildEnv string) string {
 	name := "mp-" + kubeName(app.Name) + "-" + idSuffix(app.ID)
-	domain := ""
-	if len(app.Domains) > 0 {
-		domain = strings.ToLower(strings.TrimSpace(app.Domains[0].Host))
-		if !domainPattern.MatchString(domain) {
-			domain = ""
-		}
-	}
 	return fmt.Sprintf(`set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 base='/var/lib/minipaas/builds/%s'
@@ -768,23 +813,7 @@ buildah push "$image" "docker-archive:$archive_image:$image"
 k3s ctr images import "$archive_image"
 printf '%%s' '%s' | base64 -d | k3s kubectl apply -f -
 k3s kubectl -n minipaas-apps rollout status deployment/%s --timeout=240s
-domain=$(printf '%%s' '%s' | base64 -d)
-if [ -n "$domain" ] && k3s kubectl -n default get configmap independent-caddy-config >/dev/null 2>&1; then
-  k3s kubectl -n default get configmap independent-caddy-config -o jsonpath='{.data.Caddyfile}' > "$base/Caddyfile"
-  if ! grep -Fq "$domain" "$base/Caddyfile"; then
-    cat >>"$base/Caddyfile" <<CADDY
-
-http://$domain, https://$domain {
-  encode zstd gzip
-  reverse_proxy %s.minipaas-apps.svc.cluster.local:%d
-}
-CADDY
-    k3s kubectl -n default create configmap independent-caddy-config --from-file=Caddyfile="$base/Caddyfile" --dry-run=client -o yaml | k3s kubectl apply -f -
-    k3s kubectl -n default rollout restart daemonset independent-caddy
-    k3s kubectl -n default rollout status daemonset independent-caddy --timeout=120s
-  fi
-fi
 echo 'MINIPAAS_DEPLOY_OK'
 k3s kubectl -n minipaas-apps get deployment,service -l app.kubernetes.io/name=%s -o wide
-`, app.ID, app.ID, shellB64(app.SourceType), shellB64(app.Repository), shellB64(app.Branch), app.ID, app.ArchiveName, shellB64(buildEnv), shellB64(app.BuildType), app.Port, image, base64.StdEncoding.EncodeToString(manifest), name, shellB64(domain), name, app.Port, name)
+`, app.ID, app.ID, shellB64(app.SourceType), shellB64(app.Repository), shellB64(app.Branch), app.ID, app.ArchiveName, shellB64(buildEnv), shellB64(app.BuildType), app.Port, image, base64.StdEncoding.EncodeToString(manifest), name, name)
 }

@@ -240,6 +240,9 @@ fi
 		appendAudit(s, "app.delete", id, "已删除应用 "+app.Name, nil)
 		return nil
 	})
+	caddyCtx, caddyCancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	_, _, _ = a.applyCaddyForServer(caddyCtx, server.ID)
+	caddyCancel()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

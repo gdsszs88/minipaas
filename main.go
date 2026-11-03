@@ -64,6 +64,32 @@ type Domain struct {
 	TargetPort int    `json:"targetPort"`
 }
 
+type ProxyHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type ProxyRoute struct {
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Enabled        bool          `json:"enabled"`
+	PathPrefix     string        `json:"pathPrefix"`
+	Upstream       string        `json:"upstream"`
+	StripPrefix    bool          `json:"stripPrefix"`
+	UpstreamHost   string        `json:"upstreamHost,omitempty"`
+	Streaming      bool          `json:"streaming"`
+	RequestHeaders []ProxyHeader `json:"requestHeaders,omitempty"`
+	Sort           int           `json:"sort"`
+}
+
+type SubscriptionRouting struct {
+	Enabled          bool     `json:"enabled"`
+	Domains          []string `json:"domains,omitempty"`
+	Upstream         string   `json:"upstream"`
+	UpstreamHost     string   `json:"upstreamHost"`
+	AuthorizationURL string   `json:"authorizationUrl"`
+}
+
 type DeploymentRevision struct {
 	ID         string    `json:"id"`
 	Image      string    `json:"image"`
@@ -90,6 +116,7 @@ type App struct {
 	DatabaseID      string               `json:"databaseId,omitempty"`
 	Variables       []Variable           `json:"variables,omitempty"`
 	Domains         []Domain             `json:"domains,omitempty"`
+	ProxyRoutes     []ProxyRoute         `json:"proxyRoutes,omitempty"`
 	CreatedAt       time.Time            `json:"createdAt"`
 	UpdatedAt       time.Time            `json:"updatedAt"`
 	ManagedMode     string               `json:"managedMode,omitempty"`
@@ -144,10 +171,12 @@ type AuditEvent struct {
 }
 
 type State struct {
-	Servers   []Server     `json:"servers"`
-	Apps      []App        `json:"apps"`
-	Databases []Database   `json:"databases"`
-	Audit     []AuditEvent `json:"audit"`
+	Servers             []Server            `json:"servers"`
+	Apps                []App               `json:"apps"`
+	Databases           []Database          `json:"databases"`
+	Audit               []AuditEvent        `json:"audit"`
+	SubscriptionRouting SubscriptionRouting `json:"subscriptionRouting,omitempty"`
+	CaddyBaseConfigs    map[string]string   `json:"caddyBaseConfigs,omitempty"`
 }
 
 type Store struct {
@@ -236,6 +265,9 @@ type API struct {
 	setupMu       sync.RWMutex
 	recoveryJobs  map[string]*RecoveryJob
 	recoveryMu    sync.RWMutex
+	deployMu      sync.Mutex
+	activeDeploys map[string]string
+	caddyMu       sync.Mutex
 }
 
 func (a *API) passwordMatches(value string) bool {
@@ -908,6 +940,10 @@ func redactApp(app App) App {
 	// the encrypted values kept in memory. Clone before masking anything.
 	app.Variables = append([]Variable(nil), app.Variables...)
 	app.Domains = append([]Domain(nil), app.Domains...)
+	app.ProxyRoutes = append([]ProxyRoute(nil), app.ProxyRoutes...)
+	for i := range app.ProxyRoutes {
+		app.ProxyRoutes[i].RequestHeaders = append([]ProxyHeader(nil), app.ProxyRoutes[i].RequestHeaders...)
+	}
 	for i := range app.Variables {
 		if app.Variables[i].Secret {
 			app.Variables[i].Value = "••••••••"
@@ -1075,7 +1111,8 @@ func main() {
 			copy(passwordHash[:], decoded)
 		}
 	}
-	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}, recoveryJobs: map[string]*RecoveryJob{}}
+	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}, recoveryJobs: map[string]*RecoveryJob{}, activeDeploys: map[string]string{}}
+	api.ensureRoutingDefaults()
 	api.loadSessions()
 
 	mux := http.NewServeMux()
@@ -1109,6 +1146,11 @@ func main() {
 	mux.Handle("POST /api/apps/{id}/rollback", api.auth(http.HandlerFunc(api.appRollback)))
 	mux.Handle("GET /api/apps/{id}/runtime-logs", api.auth(http.HandlerFunc(api.appRuntimeLogs)))
 	mux.Handle("GET /api/apps/{id}/domain-health", api.auth(http.HandlerFunc(api.appDomainHealth)))
+	mux.Handle("GET /api/apps/{id}/proxy-routes", api.auth(http.HandlerFunc(api.appProxyRoutes)))
+	mux.Handle("PUT /api/apps/{id}/proxy-routes", api.auth(http.HandlerFunc(api.appProxyRoutes)))
+	mux.Handle("POST /api/apps/{id}/proxy-routes/health", api.auth(http.HandlerFunc(api.appProxyRouteHealth)))
+	mux.Handle("GET /api/apps/{id}/proxy-routes/export", api.auth(http.HandlerFunc(api.appProxyRouteExport)))
+	mux.Handle("POST /api/apps/{id}/proxy-routes/restore", api.auth(http.HandlerFunc(api.appProxyRouteRestore)))
 	mux.Handle("GET /api/apps/{id}/variables", api.auth(http.HandlerFunc(api.appVariables)))
 	mux.Handle("POST /api/apps/{id}/promote", api.auth(http.HandlerFunc(api.promoteAdoptedApp)))
 	mux.Handle("PUT /api/apps/{id}/config", api.auth(http.HandlerFunc(api.appConfig)))
@@ -1139,6 +1181,7 @@ func main() {
 	}
 	server := &http.Server{Addr: listen, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 20 * time.Minute, WriteTimeout: 20 * time.Minute, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	go api.runGitAutoDeploy()
+	go api.runCaddyReconciler()
 	log.Printf("MiniPaaS listening on http://%s", listen)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)

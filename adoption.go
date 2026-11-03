@@ -129,6 +129,13 @@ k3s kubectl -n default rollout status daemonset independent-caddy --timeout=120s
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
+	caddyCtx, caddyCancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	_, caddyOutput, caddyErr := a.applyCaddyForServer(caddyCtx, server.ID)
+	caddyCancel()
+	if caddyErr != nil {
+		writeJSON(w, 502, map[string]string{"error": "域名已保存，但持久化 Caddy 路由应用失败", "output": tailText(caddyOutput, 6000)})
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "domains": domains})
 }
 
