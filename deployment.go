@@ -736,7 +736,14 @@ source_type=$(printf '%%s' '%s' | base64 -d)
 if [ "$source_type" = git ]; then
   repo=$(printf '%%s' '%s' | base64 -d)
   branch=$(printf '%%s' '%s' | base64 -d)
-  if [ -d "$source_dir/.git" ]; then git -C "$source_dir" fetch --prune origin; git -C "$source_dir" checkout -B "$branch" "origin/$branch"; else rm -rf "$source_dir"; git clone --depth 1 --branch "$branch" "$repo" "$source_dir"; fi
+  if [ -d "$source_dir/.git" ]; then
+    git -C "$source_dir" remote set-url origin "$repo"
+    git -C "$source_dir" fetch --prune origin
+    git -C "$source_dir" checkout -B "$branch" "origin/$branch"
+  else
+    rm -rf "$source_dir"
+    git clone --depth 1 --branch "$branch" "$repo" "$source_dir"
+  fi
 else
   archive="/var/lib/minipaas/uploads/%s/%s"
   rm -rf "$source_dir"; mkdir -p "$source_dir"
