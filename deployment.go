@@ -157,11 +157,11 @@ func (a *API) appDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	gitCommit := app.GitCommit
 	if app.SourceType == "git" {
-		commitCtx, commitCancel := context.WithTimeout(r.Context(), time.Minute)
-		if current, commitErr := a.currentGitCommit(commitCtx, app, server, key); commitErr == nil {
-			gitCommit = current
-		}
-		commitCancel()
+		// Record the commit selected before the build started. The branch may move
+		// while a long image build is running; recording a newer remote commit here
+		// would incorrectly suppress the next auto-deploy even though that source was
+		// never included in the image.
+		gitCommit = targetCommit
 	}
 	_ = a.store.mutate(func(state *State) error {
 		for i := range state.Apps {
