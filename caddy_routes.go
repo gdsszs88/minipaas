@@ -639,10 +639,15 @@ pod=$(k3s kubectl -n default get pod -l app=independent-caddy -o jsonpath='{.ite
 test -n "$pod"
 cat "$new" | k3s kubectl -n default exec -i "$pod" -- sh -c 'cat >/tmp/Caddyfile.validate && caddy validate --config /tmp/Caddyfile.validate --adapter caddyfile'
 k3s kubectl -n default create configmap independent-caddy-config --from-file=Caddyfile="$new" --dry-run=client -o yaml | k3s kubectl apply -f -
-if ! k3s kubectl -n default rollout restart daemonset independent-caddy || ! k3s kubectl -n default rollout status daemonset independent-caddy --timeout=150s; then
+reload_failed=0
+for pod in $(k3s kubectl -n default get pod -l app=independent-caddy -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+  cat "$new" | k3s kubectl -n default exec -i "$pod" -- sh -c 'cat >/tmp/Caddyfile.minipaas && caddy reload --config /tmp/Caddyfile.minipaas --adapter caddyfile' || reload_failed=1
+done
+if [ "$reload_failed" -ne 0 ]; then
   k3s kubectl apply -f "$backup"
-  k3s kubectl -n default rollout restart daemonset independent-caddy || true
-  k3s kubectl -n default rollout status daemonset independent-caddy --timeout=150s || true
+  for pod in $(k3s kubectl -n default get pod -l app=independent-caddy -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+    cat "$old" | k3s kubectl -n default exec -i "$pod" -- sh -c 'cat >/tmp/Caddyfile.rollback && caddy reload --config /tmp/Caddyfile.rollback --adapter caddyfile' || true
+  done
   echo MINIPAAS_CADDY_ROLLED_BACK
   exit 31
 fi

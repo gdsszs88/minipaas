@@ -45,76 +45,7 @@ func (a *API) adoptedDomainsUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	key, err := a.secrets.Decrypt(server.Credential)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "无法读取服务器凭据"})
-		return
-	}
-	target := ""
-	if app.ManagedMode == "adopted" && app.Namespace != "" && app.ServiceName != "" {
-		target = fmt.Sprintf("%s.%s.svc.cluster.local:%d", app.ServiceName, app.Namespace, app.Port)
-	} else {
-		name := "mp-" + kubeName(app.Name) + "-" + idSuffix(app.ID)
-		target = fmt.Sprintf("%s.minipaas-apps.svc.cluster.local:%d", name, app.Port)
-	}
-	block := ""
-	if len(domains) > 0 {
-		headers := []string{}
-		for _, host := range domains {
-			headers = append(headers, "http://"+host, "https://"+host)
-		}
-		block = "\n" + strings.Join(headers, ", ") + " {\n  encode zstd gzip\n  reverse_proxy " + target + "\n}\n"
-	}
-	script := fmt.Sprintf(`set -euo pipefail
-file=/tmp/Caddyfile-minipaas-adopted
-new=/tmp/Caddyfile-minipaas-adopted-new
-block=/tmp/Caddyfile-minipaas-adopted-block
-domainfile=/tmp/Caddyfile-minipaas-adopted-domains
-k3s kubectl -n default get configmap independent-caddy-config -o jsonpath='{.data.Caddyfile}' > "$file"
-printf '%%s' '%s' | base64 -d > "$block"
-printf '%%s' '%s' | base64 -d > "$domainfile"
-python3 - "$file" "$new" '%s' "$block" "$domainfile" <<'PY'
-import sys
-source, output, target, block_path, domain_path = sys.argv[1:]
-domains = [line.strip() for line in open(domain_path, encoding='utf-8') if line.strip()]
-lines = open(source, encoding='utf-8').readlines()
-result, current, depth = [], [], 0
-for line in lines:
-    if depth == 0 and line.strip().endswith('{'):
-        current = [line]
-        depth = line.count('{') - line.count('}')
-        continue
-    if depth > 0:
-        current.append(line)
-        depth += line.count('{') - line.count('}')
-        if depth == 0:
-            text = ''.join(current)
-            header = current[0] if current else ''
-            domain_match = any(('http://' + d) in header or ('https://' + d) in header for d in domains)
-            if target not in text and not domain_match:
-                result.append(text)
-            current = []
-        continue
-    result.append(line)
-if current and target not in ''.join(current):
-    result.extend(current)
-block = open(block_path, encoding='utf-8').read()
-if block:
-    result.append(block)
-open(output, 'w', encoding='utf-8').write(''.join(result))
-PY
-k3s kubectl -n default create configmap independent-caddy-config --from-file=Caddyfile="$new" --dry-run=client -o yaml | k3s kubectl apply -f -
-k3s kubectl -n default rollout restart daemonset independent-caddy
-k3s kubectl -n default rollout status daemonset independent-caddy --timeout=120s
-`, base64.StdEncoding.EncodeToString([]byte(block)), base64.StdEncoding.EncodeToString([]byte(strings.Join(domains, "\n"))), target)
-	client := RemoteClient{Server: server, PrivateKey: key}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-	defer cancel()
-	output, runErr := client.run(ctx, script, 150*time.Second)
-	if runErr != nil {
-		writeJSON(w, 502, map[string]string{"error": "更新域名路由失败", "output": tailText(output, 6000)})
-		return
-	}
+	before := a.store.Snapshot()
 	err = a.store.mutate(func(s *State) error {
 		for i := range s.Apps {
 			if s.Apps[i].ID != app.ID {
@@ -137,6 +68,7 @@ k3s kubectl -n default rollout status daemonset independent-caddy --timeout=120s
 	_, caddyOutput, caddyErr := a.applyCaddyForServer(caddyCtx, server.ID)
 	caddyCancel()
 	if caddyErr != nil {
+		_ = a.store.mutate(func(s *State) error { *s = before; return nil })
 		writeJSON(w, 502, map[string]string{"error": "域名已保存，但持久化 Caddy 路由应用失败", "output": tailText(caddyOutput, 6000)})
 		return
 	}
