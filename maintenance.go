@@ -185,7 +185,7 @@ func (a *API) maintenanceRun(w http.ResponseWriter, r *http.Request) {
 	result := a.runMaintenanceAll(trigger, settings)
 	status := 200
 	if result.Error != "" {
-		status = 502
+		status = 409 // 例如部署正在进行，本次跳过
 	}
 	writeJSON(w, status, result)
 }
@@ -218,7 +218,28 @@ func (a *API) runMaintenanceAll(trigger string, settings MaintenanceSettings) Ma
 		a.maintenanceMu.Unlock()
 	}()
 
+	// 有部署正在跑时不要动 buildah：正在构建的镜像和它的中间层不能被回收。
+	a.deployMu.Lock()
+	deploying := len(a.activeDeploys) > 0
+	a.deployMu.Unlock()
 	state := a.store.Snapshot()
+	if !deploying {
+		for _, app := range state.Apps {
+			if app.Status == "deploying" {
+				deploying = true
+				break
+			}
+		}
+	}
+	if deploying {
+		a.maintenanceMu.Lock()
+		a.maintenanceRunning = false
+		a.maintenanceMu.Unlock()
+		note := "检测到正在进行的部署，本次跳过清理，等部署结束后再执行"
+		_ = a.maintenance.Update(func(s *MaintenanceSettings) { s.LastStatus, s.LastTrigger = "skipped", trigger })
+		return MaintenanceRunResult{StartedAt: started, FinishedAt: time.Now(), Trigger: trigger, Nodes: []MaintenanceNode{}, Error: note}
+	}
+
 	protectedTotal := 0
 	logLines := []string{fmt.Sprintf("[%s] 开始自动清理（%s）", started.Format("2006-01-02 15:04:05 MST"), trigger)}
 

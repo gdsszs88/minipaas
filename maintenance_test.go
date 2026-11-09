@@ -158,3 +158,27 @@ func TestMaintenanceStorePersistsDefaults(t *testing.T) {
 		t.Fatalf("设置文件未写入: %v", err)
 	}
 }
+
+// 部署进行中绝不能动 buildah：正在构建的镜像和中间层会被回收。
+func TestMaintenanceSkipsWhileDeploying(t *testing.T) {
+	dir := t.TempDir()
+	api := &API{
+		store:         &Store{path: filepath.Join(dir, "state.json"), data: State{Servers: []Server{}, Apps: []App{}}},
+		dataDir:       dir,
+		maintenance:   openMaintenanceStore(dir),
+		activeDeploys: map[string]string{"app_1": "commit"},
+	}
+	result := api.runMaintenanceAll("测试", api.maintenance.Snapshot())
+	if result.Error == "" {
+		t.Fatal("部署进行中应当跳过清理")
+	}
+	if len(result.Nodes) != 0 {
+		t.Fatalf("跳过时不应执行任何服务器: %v", result.Nodes)
+	}
+	if status := api.maintenance.Snapshot().LastStatus; status != "skipped" {
+		t.Fatalf("状态应记录为 skipped，实际 %q", status)
+	}
+	if api.maintenanceRunning {
+		t.Fatal("跳过时必须释放运行标记，否则后续定时任务会被永久阻塞")
+	}
+}
