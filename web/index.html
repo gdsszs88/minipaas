@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>MiniPaaS 控制台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261104-proxy-layout">
+  <link rel="stylesheet" href="/styles.css?v=20261109-maintenance">
 </head>
 <body>
   <div id="login" class="login-shell">
@@ -93,6 +93,23 @@
         <div class="recovery-warning"><strong>安全恢复机制</strong><span>恢复前自动校验 SHA256，并再创建一份当前状态安全备份；只有输入指定确认文字后才会执行。</span></div>
         <div class="recovery-upload"><div><strong>从电脑导入备份包</strong><small>支持 .zip、.tar.gz、.tgz，上传完成后自动解压并校验</small></div><input id="recovery-archive" type="file" accept=".zip,.gz,.tgz,application/zip,application/gzip"><button id="recovery-upload" class="primary">上传并校验</button></div>
         <div id="recovery-packages" class="recovery-list"><div class="setup-loading"><span class="spinner"></span>正在读取服务器备份…</div></div>
+
+        <div class="section-intro maintenance-intro"><div><h3>自动清理</h3><p>内置定时器回收构建缓存与历史镜像，不需要额外装 crontab；重新部署面板或换服务器后自动生效。清理时以「成功部署记录」为准：每个网站保留最近 2 次成功部署的镜像，构建失败留下的废镜像会被回收，成功过的镜像不会被误删，随时可以回滚。</p></div></div>
+        <article class="panel maintenance-panel">
+          <div class="panel-head"><div><p class="eyebrow">DISK HOUSEKEEPING</p><h3>自动清理脚本 <small id="maintenance-status"></small></h3></div><button type="button" id="maintenance-run" class="primary">立即清理</button></div>
+          <div id="maintenance-summary" class="maintenance-summary"></div>
+          <div id="maintenance-nodes" class="maintenance-nodes"></div>
+          <details class="maintenance-log"><summary>上次执行日志</summary><pre id="maintenance-log" class="log-view">尚未执行过。</pre></details>
+          <form id="maintenance-form" class="maintenance-form">
+            <label class="check-label full"><input type="checkbox" name="enabled" checked> 启用自动清理（内置定时器，随面板启动自动运行）</label>
+            <label>每个网站保留最近成功部署的镜像<input name="keepSuccessImages" type="number" min="1" max="10" value="2"></label>
+            <label>执行间隔（小时）<input name="intervalHours" type="number" min="1" max="720" value="6"></label>
+            <label>保留最近灾难恢复包（0 = 不清理）<input name="keepRecoveryPackages" type="number" min="0" max="60" value="3"></label>
+            <label class="check-label"><input type="checkbox" name="cleanImageTar" checked> 清理构建临时镜像包 image.tar</label>
+            <label class="check-label"><input type="checkbox" name="vacuumJournal" checked> 限制系统日志占用 300MB</label>
+            <div class="maintenance-actions"><button type="submit" class="primary">保存设置</button><small class="muted" id="maintenance-hint"></small></div>
+          </form>
+        </article>
       </section>
 
       <section id="activity-page" class="page">
@@ -110,6 +127,6 @@
     </form>
   </dialog>
   <div id="toast" class="toast" role="status"></div>
-  <script src="/app.js?v=20261104-proxy-layout" defer></script>
+  <script src="/app.js?v=20261109-maintenance" defer></script>
 </body>
 </html>

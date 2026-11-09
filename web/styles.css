@@ -238,3 +238,27 @@ dialog::backdrop { background: rgba(0,0,0,.7); backdrop-filter: blur(5px); }
 @media (max-width: 580px) { .timeline-item { grid-template-columns: 9px minmax(0,1fr); } .timeline-item time { grid-column: 2; justify-self: start; min-width: 0; margin-top: 2px; } }
 @media (max-width: 720px) { dialog.proxy-modal { width: calc(100% - 16px); max-height: calc(100dvh - 16px); } dialog.proxy-modal #modal-form { padding: 18px 16px; } .proxy-route-grid { grid-template-columns: 1fr; } .proxy-route-grid label.full { grid-column: auto; } .proxy-toolbar { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 430px) { .proxy-toolbar { grid-template-columns: 1fr; } }
+
+/* 自动清理（灾难恢复页下半部分） */
+.maintenance-intro { margin-top: 34px; }
+.maintenance-panel { display: grid; gap: 16px; }
+.maintenance-summary:empty { display: none; }
+.maintenance-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.maintenance-metrics .metric { padding: 15px 16px; }
+.maintenance-metrics .metric strong { font-size: 24px; }
+.maintenance-nodes { display: grid; gap: 10px; }
+.maintenance-node { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.maintenance-node .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.maintenance-node h4 { margin: 0; font-size: 15px; }
+.maintenance-node p { margin: 8px 0 0; color: #cbd5db; font-size: 13px; }
+.maintenance-node details { margin-top: 10px; }
+.maintenance-node summary { cursor: pointer; color: var(--accent-2); font-size: 12px; }
+.log-view.compact { max-height: 180px; margin-top: 8px; }
+.maintenance-log summary { cursor: pointer; color: var(--accent-2); font-size: 13px; }
+.maintenance-log .log-view { margin-top: 10px; max-height: 320px; }
+.maintenance-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.maintenance-form label { margin: 10px 0; }
+.maintenance-form label.full, .maintenance-form .maintenance-actions { grid-column: 1 / -1; }
+.maintenance-actions { display: flex; align-items: center; gap: 14px; margin-top: 6px; }
+.maintenance-actions .primary { width: auto; }
+@media (max-width: 900px) { .maintenance-metrics { grid-template-columns: repeat(2, 1fr); } .maintenance-form { grid-template-columns: 1fr; } .maintenance-form label.full, .maintenance-form .maintenance-actions { grid-column: auto; } }

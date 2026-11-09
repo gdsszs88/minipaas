@@ -44,7 +44,7 @@ function navigate(page) {
   document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `${page}-page`));
   document.querySelectorAll('#nav a').forEach(el => el.classList.toggle('active', el.dataset.page === page));
   $('#page-title').textContent = pages[page][0]; $('#page-action').textContent = pages[page][1];
-  if (page === 'recovery') loadRecoveryPackages();
+  if (page === 'recovery') { loadRecoveryPackages(); loadMaintenance(); }
 }
 window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
 
@@ -63,6 +63,30 @@ function renderAudit(items, selector) { $(selector).innerHTML = items.length ? [
 function filteredAudit() { const q = ($('#audit-search')?.value || '').trim().toLowerCase(), type = $('#audit-filter')?.value || ''; return state.audit.filter(e => (!type || e.action.startsWith(`${type}.`)) && (!q || `${e.action} ${e.resource} ${e.message}`.toLowerCase().includes(q))); }
 function renderFullAudit() { const items = filteredAudit(); renderAudit(items, '#audit-list'); $('#audit-count').textContent = `${items.length}/${state.audit.length} 条`; }
 async function loadRecoveryPackages() { $('#recovery-packages').innerHTML = '<div class="setup-loading"><span class="spinner"></span>正在读取服务器备份…</div>'; try { const data = await api('/api/recovery/packages'); const items = data.packages || []; $('#recovery-packages').innerHTML = items.length ? items.map(p => `<article class="recovery-card"><div><strong>${escapeHTML(p.id)}</strong><small>${new Date(p.createdAt).toLocaleString('zh-CN')} · ${formatBytes(p.size)} · ${p.files} 个文件</small><div class="recovery-components"><span class="${p.manifests ? 'ready' : ''}">网站清单</span><span class="${p.images ? 'ready' : ''}">容器镜像</span><span class="${p.databases ? 'ready' : ''}">数据库 ${p.databases}</span><span class="${p.controlPlane ? 'ready' : ''}">面板设置</span><span class="${p.checksum ? 'ready' : ''}">SHA256</span></div></div><div><button class="secondary" data-recovery-verify="${escapeHTML(p.id)}">校验</button><button class="primary" data-recovery-open="${escapeHTML(p.id)}">选择并恢复</button></div></article>`).join('') : '<div class="empty-state">服务器上尚无完整备份，请先运行一次完整备份。</div>'; } catch (error) { $('#recovery-packages').innerHTML = `<div class="empty-state error">${escapeHTML(error.message)}</div>`; } }
+const maintenanceFields = { enabled: 'checkbox', keepSuccessImages: 'number', intervalHours: 'number', keepRecoveryPackages: 'number', cleanImageTar: 'checkbox', vacuumJournal: 'checkbox' };
+function maintenanceText(settings, detailed) { if (!settings.lastRunAt) return settings.enabled ? '尚未运行，将在面板启动后自动执行' : '已停用'; const last = new Date(settings.lastRunAt); const trigger = settings.lastTrigger || '自动'; const base = `${last.toLocaleString('zh-CN')} · ${trigger} · 释放 ${settings.lastReclaimedMB || 0}MB`; if (!detailed) return base; const next = new Date(last.getTime() + (settings.intervalHours || 6) * 3600000); return `${base} ｜ 下次自动执行 ${next.toLocaleString('zh-CN')}`; }
+function maintenanceNodeCard(node) { const tone = node.status === 'ok' ? 'running' : 'failed'; const protectedCount = (node.protected || []).length; return `<article class="maintenance-node"><div class="card-top"><div><h4>${escapeHTML(node.name)}</h4><p>${escapeHTML(node.host)}</p></div><span class="badge ${tone}">${node.status === 'ok' ? '正常' : '失败'}</span></div><p>磁盘 ${node.diskPercent}% · 可用 ${(node.availGB || 0).toFixed(1)} GB · 镜像 ${node.imagesTotal} 个（本次删除 ${node.imagesDeleted}，释放 ${node.reclaimedMB} MB）</p><p class="muted">保留 ${protectedCount} 个成功部署镜像，失败的构建镜像已回收${node.message ? ' · ' + escapeHTML(node.message) : ''}</p>${protectedCount ? `<details><summary>查看被保护的镜像</summary><pre class="log-view compact">${escapeHTML((node.protected || []).join('\n'))}</pre></details>` : ''}</article>`; }
+function renderMaintenance(data) {
+  const settings = data.settings || {}, form = $('#maintenance-form');
+  Object.keys(maintenanceFields).forEach(name => { const field = form.elements[name]; if (!field) return; if (maintenanceFields[name] === 'checkbox') field.checked = Boolean(settings[name]); else field.value = settings[name] ?? field.value; });
+  $('#maintenance-status').textContent = maintenanceText(settings, true);
+  $('#maintenance-hint').textContent = data.running ? '清理任务正在执行…' : `共 ${data.serverCount ?? 0} 台服务器，全部通过与部署相同的 SSH 通道执行，不影响正在运行的网站。`;
+  $('#maintenance-log').textContent = settings.lastLog || '尚未执行过。';
+  const nodes = settings.lastServers || [];
+  $('#maintenance-summary').innerHTML = nodes.length ? `<div class="maintenance-metrics">${metric('上次释放', `${settings.lastReclaimedMB || 0} MB`, maintenanceText(settings))}${metric('托管服务器', String(nodes.length), `${nodes.filter(n => n.status === 'ok').length} 台清理成功`)}${metric('保护镜像', String(nodes.reduce((sum, n) => sum + (n.protected || []).length, 0)), '最近成功部署，不会误删')}${metric('保留恢复包', String(settings.keepRecoveryPackages || 0), '其余旧备份自动清理')}</div>` : '';
+  $('#maintenance-nodes').innerHTML = nodes.length ? nodes.map(maintenanceNodeCard).join('') : '<div class="empty-state">还没有执行记录，点「立即清理」试一次。</div>';
+}
+async function loadMaintenance() {
+  try { renderMaintenance(await api('/api/maintenance')); }
+  catch (error) { $('#maintenance-nodes').innerHTML = `<div class="empty-state error">${escapeHTML(error.message)}</div>`; }
+}
+async function runMaintenanceNow() {
+  const button = $('#maintenance-run'), original = button.textContent;
+  button.disabled = true; button.textContent = '清理中…';
+  try { const result = await api('/api/maintenance/run', { method: 'POST', body: '{}' }); toast(`清理完成，释放约 ${result.reclaimedMB || 0}MB`); await loadMaintenance(); }
+  catch (error) { toast(error.message); }
+  finally { button.disabled = false; button.textContent = original; }
+}
 function openRecoveryWizard(id) { $('#modal-form').dataset.kind = `recovery:${id}`; $('#modal-eyebrow').textContent = 'DISASTER RECOVERY'; $('#modal-title').textContent = `恢复 ${id}`; $('#modal-fields').innerHTML = `<div class="recovery-steps full"><span class="active">1 选择项目</span><span>2 校验备份</span><span>3 安全备份</span><span>4 执行恢复</span></div><label class="full check-label"><input type="checkbox" name="server" checked> 服务器运行环境与系统服务</label><label class="full check-label"><input type="checkbox" name="applications" checked> 网站、K3s 工作负载与容器镜像</label><label class="full check-label"><input type="checkbox" name="variables" checked> 环境变量与 Kubernetes Secret</label><label class="full check-label"><input type="checkbox" name="databases" checked> PostgreSQL/MySQL/Redis 数据</label><label class="full check-label"><input type="checkbox" name="domains" checked> 域名、Caddy 路由与 HTTPS 配置</label><label class="full check-label"><input type="checkbox" name="controlPlane" checked> MiniPaaS 面板设置、加密密钥与服务器列表</label><label class="full">输入“恢复 ${escapeHTML(id)}”确认<input name="confirm" autocomplete="off" required placeholder="恢复 ${escapeHTML(id)}"></label><p class="muted full">恢复面板设置后服务会自动重启，当前登录可能失效。恢复数据库适用于新服务器或数据损坏后的整体回滚。</p>`; $('#modal-error').textContent = ''; $('.modal-actions').classList.remove('hidden'); $('.modal-actions .primary').textContent = '开始安全恢复'; $('#modal').showModal(); }
 function renderRecoveryJob(job) { $('#modal-form').dataset.kind = ''; $('#modal-title').textContent = job.status === 'completed' ? '灾难恢复完成' : job.status === 'failed' ? '恢复失败' : '正在执行灾难恢复'; $('#modal-fields').innerHTML = `<div class="progress-wrap full"><div class="progress-meta"><strong>${escapeHTML(job.current || '准备中')}</strong><span>${job.progress}%</span></div><div class="progress-track"><i style="width:${job.progress}%"></i></div></div><pre class="log-view">${escapeHTML((job.log || []).join('\n'))}</pre><p class="muted full">恢复任务在服务器后台执行，关闭窗口不会取消任务。</p>`; $('#modal-error').textContent = job.error || ''; $('.modal-actions').classList.add('hidden'); }
 async function pollRecoveryJob(id) { try { const job = await api(`/api/recovery/jobs/${encodeURIComponent(id)}`); renderRecoveryJob(job); if (job.status === 'running') return setTimeout(() => pollRecoveryJob(id), 1500); if (job.status === 'completed') { toast('灾难恢复完成'); setTimeout(refresh, 6000); } } catch (error) { $('#modal-error').textContent = error.message; } }
@@ -201,6 +225,23 @@ $('#audit-search').addEventListener('input', renderFullAudit);
 $('#audit-filter').addEventListener('change', renderFullAudit);
 $('#audit-export').addEventListener('click', () => { const blob = new Blob([JSON.stringify(filteredAudit(), null, 2)], { type: 'application/json' }), link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `minipaas-audit-${new Date().toISOString().slice(0,10)}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); });
 $('#audit-cleanup').addEventListener('click', async () => { if (!window.confirm('确定清理 90 天以前的操作记录吗？最近 90 天记录会保留。')) return; try { const result = await api('/api/audit?days=90', { method: 'DELETE' }); toast(`已清理 ${result.removed} 条旧记录`); await refresh(); } catch (error) { toast(error.message); } });
+$('#maintenance-run').addEventListener('click', runMaintenanceNow);
+$('#maintenance-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget, button = form.querySelector('button[type="submit"]'), original = button.textContent;
+  const payload = {
+    enabled: form.elements.enabled.checked,
+    keepSuccessImages: Number(form.elements.keepSuccessImages.value) || 2,
+    intervalHours: Number(form.elements.intervalHours.value) || 6,
+    keepRecoveryPackages: Number(form.elements.keepRecoveryPackages.value) || 0,
+    cleanImageTar: form.elements.cleanImageTar.checked,
+    vacuumJournal: form.elements.vacuumJournal.checked
+  };
+  button.disabled = true; button.textContent = '保存中…';
+  try { await api('/api/maintenance', { method: 'PUT', body: JSON.stringify(payload) }); toast('自动清理设置已保存'); await loadMaintenance(); }
+  catch (error) { toast(error.message); }
+  finally { button.disabled = false; button.textContent = original; }
+});
 $('#recovery-upload').addEventListener('click', async () => { const file = $('#recovery-archive').files[0]; if (!file) return toast('请先选择备份压缩包'); const button = $('#recovery-upload'), form = new FormData(); form.append('archive', file); button.disabled = true; button.textContent = `上传中 ${formatBytes(file.size)}…`; try { const result = await api('/api/recovery/upload', { method: 'POST', body: form }); $('#recovery-archive').value = ''; toast(`备份 ${result.id} 已上传并校验`); await loadRecoveryPackages(); } catch (error) { toast(error.message); } finally { button.disabled = false; button.textContent = '上传并校验'; } });
 
 document.addEventListener('click', async (event) => {

@@ -725,6 +725,20 @@ func buildDeployScript(app App, manifest []byte, image, buildEnv string) string 
 	name := "mp-" + kubeName(app.Name) + "-" + idSuffix(app.ID)
 	return fmt.Sprintf(`set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+# 部署前磁盘预检：构建导出镜像要写 1GB 左右，空间不够会中途失败并留下半成品。
+# 这里只回收纯临时产物（构建缓存包与系统日志），不碰任何镜像，失败的清理不会影响部署。
+mkdir -p /var/lib/minipaas/builds
+avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+if [ "${avail_kb:-0}" -lt 5242880 ]; then
+  echo "[磁盘预检] 可用空间 $((avail_kb/1024/1024))GB，先回收构建缓存与系统日志…"
+  find /var/lib/minipaas/builds -maxdepth 2 -name image.tar -mmin +30 -print -delete 2>/dev/null || true
+  journalctl --vacuum-size=300M >/dev/null 2>&1 || true
+  avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+  echo "[磁盘预检] 回收后可用 $((avail_kb/1024/1024))GB"
+  if [ "${avail_kb:-0}" -lt 2097152 ]; then
+    echo "[磁盘预检] 空间仍然不足，请到「灾难恢复 → 自动清理」点立即清理后再部署"
+  fi
+fi
 base='/var/lib/minipaas/builds/%s'
 source_dir="$base/source"
 mkdir -p "$base" /var/lib/minipaas/uploads/%s

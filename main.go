@@ -274,6 +274,10 @@ type API struct {
 	deployMu      sync.Mutex
 	activeDeploys map[string]string
 	caddyMu       sync.Mutex
+
+	maintenance        *MaintenanceStore
+	maintenanceMu      sync.Mutex
+	maintenanceRunning bool
 }
 
 func (a *API) passwordMatches(value string) bool {
@@ -1123,7 +1127,7 @@ func main() {
 			copy(passwordHash[:], decoded)
 		}
 	}
-	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}, recoveryJobs: map[string]*RecoveryJob{}, activeDeploys: map[string]string{}}
+	api := &API{store: store, password: passwordHash, sessions: map[string]session{}, sessionTTL: envDuration("MINIPAAS_SESSION_TTL", 24*time.Hour), loginFailures: map[string]loginFailure{}, secrets: secretBox, dataDir: dataDir, setupJobs: map[string]*SetupJob{}, recoveryJobs: map[string]*RecoveryJob{}, activeDeploys: map[string]string{}, maintenance: openMaintenanceStore(dataDir)}
 	api.ensureRoutingDefaults()
 	api.loadSessions()
 
@@ -1141,6 +1145,9 @@ func main() {
 	mux.Handle("POST /api/recovery/packages/{id}/verify", api.auth(http.HandlerFunc(api.recoveryVerify)))
 	mux.Handle("POST /api/recovery/jobs", api.auth(http.HandlerFunc(api.recoveryStart)))
 	mux.Handle("GET /api/recovery/jobs/{id}", api.auth(http.HandlerFunc(api.recoveryStatus)))
+	mux.Handle("GET /api/maintenance", api.auth(http.HandlerFunc(api.maintenanceSnapshot)))
+	mux.Handle("PUT /api/maintenance", api.auth(http.HandlerFunc(api.maintenanceUpdate)))
+	mux.Handle("POST /api/maintenance/run", api.auth(http.HandlerFunc(api.maintenanceRun)))
 	mux.Handle("GET /api/monitoring", api.auth(http.HandlerFunc(api.monitoring)))
 	mux.Handle("/api/servers", api.auth(http.HandlerFunc(api.servers)))
 	mux.Handle("POST /api/servers/{id}/{action}", api.auth(http.HandlerFunc(api.serverAction)))
@@ -1194,6 +1201,7 @@ func main() {
 	server := &http.Server{Addr: listen, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 20 * time.Minute, WriteTimeout: 20 * time.Minute, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	go api.runGitAutoDeploy()
 	go api.runCaddyReconciler()
+	go api.runAutoMaintenance()
 	log.Printf("MiniPaaS listening on http://%s", listen)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
